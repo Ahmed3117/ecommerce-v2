@@ -1,0 +1,1424 @@
+import random
+import string
+from django.db import models, transaction
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.db.models import Sum
+from products.utils import send_whatsapp_message
+from accounts.models import YEAR_CHOICES, User
+from core import settings
+from django.utils import timezone
+from django.utils.html import format_html
+import logging
+
+logger = logging.getLogger(__name__)
+
+GOVERNMENT_CHOICES = [
+    ('1', 'Cairo'),
+    ('2', 'Alexandria'),
+    ('3', 'Kafr El Sheikh'),
+    ('4', 'Dakahlia'),
+    ('5', 'Sharqia'),
+    ('6', 'Gharbia'),
+    ('7', 'Monufia'),
+    ('8', 'Qalyubia'),
+    ('9', 'Giza'),
+    ('10', 'Beni Suef'),
+    ('11', 'Fayoum'),
+    ('12', 'Minya'),
+    ('13', 'Assiut'),
+    ('14', 'Sohag'),
+    ('15', 'Qena'),
+    ('16', 'Luxor'),
+    ('17', 'Aswan'),
+    ('18', 'Red Sea'),
+    ('19', 'Beheira'),
+    ('20', 'Ismailia'),
+    ('21', 'Suez'),
+    ('22', 'Port Said'),
+    ('23', 'Damietta'),
+    ('24', 'Matruh'),
+    ('25', 'New Valley'),
+    ('26', 'North Sinai'),
+    ('27', 'South Sinai'),
+]
+
+PILL_STATUS_CHOICES = [
+    ('i', 'initiated'),
+    ('w', 'Waiting'),
+    ('p', 'Paid'),
+    ('bp', 'Being Prepared'),
+    ('re', 'ready for delivery'),
+    ('u', 'Under Delivery'),
+    ('d', 'Delivered'),
+    ('r', 'Refused'),
+    ('c', 'Canceled'),
+]
+
+SIZES_CHOICES = [
+    ('s', 'S'),
+    ('xs', 'XS'),
+    ('m', 'M'),
+    ('l', 'L'),
+    ('xl', 'XL'),
+    ('xxl', 'XXL'),
+    ('xxxl', 'XXXL'),
+    ('xxxxl', 'XXXXL'),
+    ('xxxxxl', 'XXXXXL'),
+]
+
+PAYMENT_CHOICES = [
+    ('c', 'cash'),
+    ('v', 'visa'),
+]
+
+def generate_pill_number():
+    """Generate a unique 20-digit pill number."""
+    while True:
+        pill_number = ''.join(random.choices(string.digits, k=20))
+        if not Pill.objects.filter(pill_number=pill_number).exists():
+            return pill_number
+
+def create_random_coupon():
+    letters = string.ascii_lowercase
+    nums = ['0', '2', '3', '4', '5', '6', '7', '8', '9']
+    marks = ['@', '#', '$', '%', '&', '*']
+    return '-'.join(random.choice(letters) + random.choice(nums) + random.choice(marks) for _ in range(5))
+
+class Category(models.Model):
+    product_type = [
+        ('book', 'Book'),
+        ('product', 'Product'),
+    ]
+    name = models.CharField(max_length=100, unique=True)
+    image = models.ImageField(upload_to='categories/', null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)  
+    type = models.CharField(
+        max_length=20,
+        choices=product_type,
+        default='product',
+        help_text="Type of the product"
+    )
+    class Meta:
+        ordering = ['-created_at']  
+
+    def __str__(self):
+        return self.name
+
+class SubCategory(models.Model):
+    name = models.CharField(max_length=100)
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='subcategories')
+    created_at = models.DateTimeField(default=timezone.now)  
+
+    class Meta:
+        ordering = ['-created_at']  
+        verbose_name_plural = 'Sub Categories'
+
+    def __str__(self):
+        return f"{self.category.name} - {self.name}"
+
+class Brand(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    logo = models.ImageField(upload_to='brands/', null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)  
+
+    class Meta:
+        ordering = ['-created_at']  
+
+    def __str__(self):
+        return self.name
+
+class Subject(models.Model):
+    name = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return self.name
+    
+class Teacher(models.Model):
+    name = models.CharField(max_length=150)
+    bio = models.TextField(null=True, blank=True)
+    image = models.ImageField(upload_to='teachers/', null=True, blank=True)
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='teachers')
+    facebook = models.CharField(max_length=200, null=True, blank=True)
+    instagram = models.CharField(max_length=200, null=True, blank=True)
+    twitter = models.CharField(max_length=200, null=True, blank=True)
+    linkedin = models.CharField(max_length=200, null=True, blank=True)
+    youtube = models.CharField(max_length=200, null=True, blank=True)
+    whatsapp = models.CharField(max_length=200, null=True, blank=True)
+    tiktok = models.CharField(max_length=200, null=True, blank=True)
+    telegram = models.CharField(max_length=200, null=True, blank=True)
+    website = models.CharField(max_length=200, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return self.name
+
+class Product(models.Model):
+    product_number = models.CharField(max_length=20, editable=False, null=True, blank=True)
+    product_type = [
+            ('book', 'Book'),
+            ('product', 'Product'),
+        ]
+    name = models.CharField(max_length=100)
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, null=True, blank=True, related_name='products')
+    sub_category = models.ForeignKey(SubCategory, on_delete=models.CASCADE, null=True, blank=True, related_name='products')
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, null=True, blank=True, related_name='products')
+    teacher = models.ForeignKey(Teacher, on_delete=models.CASCADE, null=True, blank=True, related_name='products')
+    brand = models.ForeignKey(Brand, on_delete=models.CASCADE, null=True, blank=True, related_name='products')
+    price = models.FloatField(null=True, blank=True)
+    threshold = models.PositiveIntegerField(
+        default=10,
+        help_text="Minimum quantity threshold for low stock alerts"
+    )
+    description = models.TextField(max_length=1000, null=True, blank=True)
+    is_important = models.BooleanField(
+        default=False,
+        help_text="Mark if this product is important/special"
+    )
+    date_added = models.DateTimeField(auto_now_add=True)
+    base_image = models.ImageField(
+        upload_to='products/',
+        null=True,
+        blank=True,
+        help_text="Main image for the product"
+    )
+
+    type = models.CharField(
+        max_length=20,
+        choices=product_type,
+        default='product',
+        help_text="Type of the product"
+    )
+    year = models.CharField(
+        max_length=20,
+        choices=YEAR_CHOICES,
+        null=True,
+        blank=True,
+    )
+    
+    def get_current_discount(self):
+        """Returns the best active discount (either product or category level)"""
+        now = timezone.now()
+        product_discount = self.discounts.filter(
+            is_active=True,
+            discount_start__lte=now,
+            discount_end__gte=now
+        ).order_by('-discount').first()
+
+        category_discount = None
+        if self.category:
+            category_discount = self.category.discounts.filter(
+                is_active=True,
+                discount_start__lte=now,
+                discount_end__gte=now
+            ).order_by('-discount').first()
+
+        if product_discount and category_discount:
+            return max(product_discount, category_discount, key=lambda d: d.discount)
+        return product_discount or category_discount
+
+    def price_after_product_discount(self):
+        last_product_discount = self.discounts.last()
+        if last_product_discount:
+            return self.price - ((last_product_discount.discount / 100) * self.price)
+        return self.price
+
+    def price_after_category_discount(self):
+        if self.category:  
+            last_category_discount = self.category.discounts.last()
+            if last_category_discount:
+                return self.price - ((last_category_discount.discount / 100) * self.price)
+        return self.price
+
+    def discounted_price(self):
+        discount = self.get_current_discount()
+        if discount:
+            return self.price * (1 - discount.discount / 100)
+        return self.price
+
+    def has_discount(self):
+        return self.get_current_discount() is not None
+
+    def main_image(self):
+        if self.base_image:
+            return self.base_image  # This should return a FileField/ImageField object
+
+        images = self.images.all()
+        if images.exists():
+            # Make sure this returns a FileField/ImageField object
+            return random.choice(images).image
+
+        return None  # Explicitly return None if no image is found
+
+    def images(self):
+        return self.images.all()
+
+    def number_of_ratings(self):
+        return self.ratings.count()
+
+    def average_rating(self):
+        ratings = self.ratings.all()
+        if ratings.exists():
+            return round(sum(rating.star_number for rating in ratings) / ratings.count(), 1)
+        return 0.0
+
+    def total_quantity(self):
+        return self.availabilities.aggregate(total=Sum('quantity'))['total'] or 0
+
+    def available_colors(self):
+        """Returns a list of unique colors available for this product."""
+        colors = Color.objects.filter(
+            productavailability__product=self,
+            productavailability__color__isnull=False
+        ).distinct().values('id', 'name')
+        return [{"color_id": color['id'], "color_name": color['name']} for color in colors]
+
+    def available_sizes(self):
+        return self.availabilities.filter(size__isnull=False).values_list('size', flat=True).distinct()
+
+    def is_low_stock(self):
+        return self.total_quantity() <= self.threshold
+    
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        # Save first to get the ID if this is a new product
+        is_new = not self.pk
+        super().save(*args, **kwargs)
+        
+        # Generate product_number after saving to ensure we have an ID
+        if is_new and not self.product_number:
+            self.product_number = f"Bookefy-{self.id}"
+            # Update only the product_number field to avoid infinite recursion
+            Product.objects.filter(pk=self.pk).update(product_number=self.product_number)
+
+    class Meta:
+        ordering = ['-date_added']
+        
+class SpecialProduct(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='special_products'
+    )
+    special_image = models.ImageField(
+        upload_to='special_products/',
+        null=True,
+        blank=True
+    )
+    order = models.PositiveIntegerField(
+        default=0,
+        help_text="Ordering priority (higher numbers come first)"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Show this special product"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-order', '-created_at']
+        verbose_name = 'Special Product'
+        verbose_name_plural = 'Special Products'
+
+    def __str__(self):
+        return f"Special: {self.product.name}"
+    
+class BestProduct(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='best_products'
+    )
+    order = models.PositiveIntegerField(
+        default=0,
+        help_text="Ordering priority (higher numbers come first)"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Show this product"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-order', '-created_at']
+
+
+    def __str__(self):
+        return self.product.name
+
+class ProductImage(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='images'
+    )
+    image = models.ImageField(upload_to='product_images/')
+    created_at = models.DateTimeField(default=timezone.now)  
+
+    class Meta:
+        ordering = ['-created_at']  
+
+    def __str__(self):
+        return f"Image for {self.product.name}"
+class ProductDescription(models.Model):
+    product = models.ForeignKey(
+        Product, 
+        on_delete=models.CASCADE, 
+        related_name='descriptions'
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        verbose_name = 'Product Description'
+        verbose_name_plural = 'Product Descriptions'
+
+    def __str__(self):
+        return f"{self.title} - {self.product.name}"
+
+class Color(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    degree = models.CharField(max_length=50)
+    created_at = models.DateTimeField(default=timezone.now)  # Added
+
+    class Meta:
+        ordering = ['-created_at']  # Added
+
+    def __str__(self):
+        return self.name
+class ProductAvailability(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='availabilities'
+    )
+    size = models.CharField(max_length=50, null=True, blank=True)
+    color = models.ForeignKey(
+        Color,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
+    quantity = models.PositiveIntegerField()
+    native_price = models.FloatField(
+        default=0.0,
+        help_text="The original price the owner paid for this product batch"
+    )
+    date_added = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['product', 'size', 'color']
+        ordering = ['-date_added'] 
+
+    def __str__(self):
+        return f"{self.product.name} - {self.size} - {self.color.name if self.color else 'No Color'}"
+
+# class ProductSales(models.Model):
+#     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='sales')
+#     quantity = models.PositiveIntegerField()
+#     size = models.CharField(max_length=50, null=True, blank=True)
+#     color = models.ForeignKey(Color, on_delete=models.CASCADE, null=True, blank=True)
+#     price_at_sale = models.FloatField()
+#     date_sold = models.DateTimeField(auto_now_add=True)
+#     pill = models.ForeignKey('Pill', on_delete=models.CASCADE, related_name='product_sales')
+
+#     def __str__(self):
+#         return f"{self.product.name} - {self.quantity} sold on {self.date_sold}"
+
+class Shipping(models.Model):
+    government = models.CharField(choices=GOVERNMENT_CHOICES, max_length=2)
+    shipping_price = models.FloatField(default=0.0)
+    
+
+    def __str__(self):
+        return f"{self.get_government_display()} - {self.shipping_price}"
+
+    class Meta:
+        ordering = ['government']  
+
+class PillItem(models.Model):
+    pill = models.ForeignKey('Pill', on_delete=models.CASCADE, null=True, blank=True, related_name='pill_items')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pill_items', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='pill_items')
+    quantity = models.PositiveIntegerField(default=1)
+    size = models.CharField(max_length=10, choices=SIZES_CHOICES, null=True, blank=True)
+    color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(choices=PILL_STATUS_CHOICES, max_length=2, null=True, blank=True)
+    date_added = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    
+    # New fields for sales analysis
+    native_price_at_sale = models.FloatField(null=True, blank=True)
+    price_at_sale = models.FloatField(null=True, blank=True)
+    date_sold = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-date_added']
+        unique_together = ['user', 'product', 'size', 'color', 'status', 'pill']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['date_sold']),
+            models.Index(fields=['product', 'status']),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Set date_sold when status changes to 'paid' or 'delivered'
+        if self.status in ['p', 'd'] and not self.date_sold:
+            self.date_sold = timezone.now()
+            
+        # Set prices if not already set
+        if self.status in ['p', 'd'] and not self.price_at_sale:
+            self.price_at_sale = self.product.discounted_price()
+            
+        if self.status in ['p', 'd'] and not self.native_price_at_sale:
+            availability = self.product.availabilities.filter(
+                size=self.size,
+                color=self.color
+            ).first()
+            self.native_price_at_sale = availability.native_price if availability else 0
+            
+        super().save(*args, **kwargs)
+     
+
+
+
+class Pill(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pills')
+    items = models.ManyToManyField(PillItem, related_name='pills')
+    status = models.CharField(choices=PILL_STATUS_CHOICES, max_length=2, default='i')
+    date_added = models.DateTimeField(auto_now_add=True)
+    paid = models.BooleanField(default=False)
+    coupon = models.ForeignKey('CouponDiscount', on_delete=models.SET_NULL, null=True, blank=True, related_name='pills')
+    coupon_discount = models.FloatField(default=0.0)  # Stores discount amount
+    gift_discount = models.ForeignKey('PillGift', on_delete=models.SET_NULL, null=True, blank=True, related_name='pills')
+    tracking_number = models.CharField(max_length=50, null=True, blank=True)
+    pill_number = models.CharField(max_length=20, editable=False, unique=True, default=generate_pill_number)
+    
+    # Khazenly fields
+    is_shipped = models.BooleanField(default=False)
+    khazenly_data = models.JSONField(null=True, blank=True)
+    khazenly_order_id = models.CharField(max_length=100, null=True, blank=True, help_text="Khazenly internal order ID")
+    khazenly_sales_order_number = models.CharField(max_length=100, null=True, blank=True, help_text="Khazenly sales order number (KH-BOOKIFAY-xxxxx)")
+    khazenly_order_number = models.CharField(max_length=100, null=True, blank=True, help_text="Order number sent to Khazenly")
+    khazenly_created_at = models.DateTimeField(null=True, blank=True, help_text="When the Khazenly order was created")
+    
+    # Shake-out fields (replacing Fawaterak)
+    shakeout_invoice_id = models.CharField(max_length=100, null=True, blank=True, help_text="Shake-out invoice ID")
+    shakeout_invoice_ref = models.CharField(max_length=100, null=True, blank=True, help_text="Shake-out invoice reference")
+    shakeout_data = models.JSONField(null=True, blank=True, help_text="Shake-out invoice response data")
+    shakeout_created_at = models.DateTimeField(null=True, blank=True, help_text="When the Shake-out invoice was created")
+    
+    def save(self, *args, **kwargs):
+        if not self.pill_number:
+            self.pill_number = generate_pill_number()
+
+        # Track if paid status is being changed to True
+        is_newly_paid = False
+        if self.pk:
+            try:
+                old_pill = Pill.objects.get(pk=self.pk)
+                if not old_pill.paid and self.paid:
+                    is_newly_paid = True
+            except Pill.DoesNotExist:
+                pass
+        elif self.paid:
+            is_newly_paid = True
+
+        is_new = not self.pk
+        old_status = None if is_new else Pill.objects.get(pk=self.pk).status
+
+        super().save(*args, **kwargs)
+
+        if is_new:
+            PillStatusLog.objects.create(pill=self, status=self.status)
+            for item in self.items.all():
+                item.status = self.status
+                if self.status in ['p', 'd']:
+                    self._update_pill_item_prices(item)
+                item.save()
+            self.apply_gift_discount()
+        else:
+            if old_status != self.status:
+                status_log, created = PillStatusLog.objects.get_or_create(
+                    pill=self,
+                    status=self.status
+                )
+                if not created:
+                    status_log.changed_at = timezone.now()
+                    status_log.save()
+
+                if self.status in ['c', 'r'] and old_status == 'd':
+                    self.restore_inventory()
+
+                self.items.update(status=self.status)
+
+                if self.status in ['p', 'd']:
+                    for item in self.items.all():
+                        self._update_pill_item_prices(item)
+                        item.save()
+
+                if self.status != 'd' and not self.paid:
+                    self.apply_gift_discount()
+
+                if old_status != 'd' and self.status == 'd':
+                    self.process_delivery()
+
+                if self.paid and self.status != 'p':
+                    super().save(*args, **kwargs)
+                    self.send_payment_notification()
+
+        # Create Khazenly order if paid was just set to True
+        if is_newly_paid:
+            self._create_khazenly_order()
+
+    def _create_khazenly_order(self):
+        """Create Khazenly order when paid becomes True"""
+        try:
+            # Check if order already sent to Khazenly - skip if it exists
+            if self.has_khazenly_order:
+                logger.info(f"Skipping Khazenly order creation for pill {self.pill_number} - order already exists")
+                logger.info(f"  - Existing Khazenly Order ID: {self.khazenly_order_id}")
+                logger.info(f"  - Existing Sales Order Number: {self.khazenly_sales_order_number}")
+                return
+            
+            from services.khazenly_service import khazenly_service
+            
+            logger.info(f"Creating Khazenly order for pill {self.pill_number}")
+            
+            result = khazenly_service.create_order(self)
+            
+            if result['success']:
+                data = result['data']
+                
+                # Store specific Khazenly order information and set is_shipped to True
+                update_fields = {
+                    'khazenly_data': data,
+                    'khazenly_order_id': data.get('khazenly_order_id'),
+                    'khazenly_sales_order_number': data.get('sales_order_number'),
+                    'khazenly_created_at': timezone.now(),
+                    'is_shipped': True  # Set is_shipped to True after successful order creation
+                }
+                
+                # Update the model without triggering save again
+                Pill.objects.filter(pk=self.pk).update(**update_fields)
+                
+                logger.info(f"✓ Successfully created Khazenly order for pill {self.pill_number}")
+                logger.info(f"  - Khazenly Order ID: {data.get('khazenly_order_id')}")
+                logger.info(f"  - Sales Order Number: {data.get('sales_order_number')}")
+                logger.info(f"  - Order Number: {data.get('order_number')}")
+                logger.info(f"  - is_shipped set to True")
+                
+            else:
+                error_msg = result.get('error', 'Unknown error from Khazenly service')
+                logger.error(f"✗ Failed to create Khazenly order for pill {self.pill_number}: {error_msg}")
+                # Raise exception so it can be caught and displayed in admin
+                raise Exception(f"Khazenly service error: {error_msg}")
+                
+        except Exception as e:
+            logger.error(f"✗ Error creating Khazenly order for pill {self.pill_number}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Re-raise the exception so it can be caught by the admin view
+            raise
+    
+
+    @property
+    def khazenly_order_number(self):
+        """Get Khazenly order number from stored data"""
+        if self.khazenly_data:
+            return self.khazenly_data.get('orderNumber', self.pill_number)
+        return None
+
+    @property
+    def has_khazenly_order(self):
+        """Check if this pill has a Khazenly order"""
+        return bool(self.khazenly_data)
+
+    @property
+    def khazenly_status(self):
+        """Get Khazenly order status"""
+        if self.has_khazenly_order:
+            return "Created"
+        elif self.is_shipped:
+            return "Pending"
+        else:
+            return "Not Shipped"
+    def create_fawry_payment(self):
+        """Create Fawry payment invoice"""
+        from services.fawaterak_service import FawaterakService
+        service = FawaterakService()
+        result, error = service.create_fawry_invoice(self)
+        
+        if result:
+            self.fawaterak_invoice_key = result.get('invoice_key')
+            self.fawaterak_data = result
+            self.save()
+            return result.get('invoice_url')
+        
+        logger.error(f"Failed to create Fawry payment: {error}")
+        return None
+    def create_fawaterak_invoice(self):
+        """Create a Fawory Fawry invoice for this pill"""
+        from services.fawaterak_service import FawaterakService
+        
+        fawaterak = FawaterakService()
+        invoice_data, error = fawaterak.create_fawry_invoice(self)
+        
+        if invoice_data:
+            self.fawaterak_invoice_key = invoice_data.get('invoice_key')
+            self.fawaterak_data = invoice_data
+            self.save(update_fields=['fawaterak_invoice_key', 'fawaterak_data'])
+            return invoice_data.get('invoice_url')
+        return None
+
+    def check_fawaterak_payment(self):
+        """Check payment status with Fawaterak"""
+        if not self.fawaterak_invoice_key:
+            return None, "No Fawaterak invoice associated"
+            
+        from services.fawaterak_service import FawaterakService
+        
+        fawaterak = FawaterakService()
+        payment_data, error = fawaterak.check_payment_status(self.fawaterak_invoice_key)
+        
+        if payment_data:
+            # Update payment status if needed
+            if payment_data.get('payment_status') == 'paid' and not self.paid:
+                self.paid = True
+                self.status = 'p'  # Set to paid status
+                self.save(update_fields=['paid', 'status'])
+            return payment_data, None
+        return None, error
+
+    @property
+    def fawaterak_payment_url(self):
+        """Get Fawaterak payment URL if exists"""
+        if self.fawaterak_invoice_key and self.fawaterak_data:
+            return self.fawaterak_data.get('invoice_url')
+        return None
+
+    @property
+    def fawaterak_payment_status(self):
+        """Get Fawaterak payment status"""
+        if not self.fawaterak_invoice_key:
+            return "No invoice"
+        if self.paid:
+            return "Paid"
+        return "Pending"
+
+    def create_shakeout_invoice(self):
+        """Create a Shake-out invoice for this pill"""
+        from services.shakeout_service import shakeout_service
+        
+        result = shakeout_service.create_payment_invoice(self)
+        
+        if result['success']:
+            data = result['data']
+            self.shakeout_invoice_id = data.get('invoice_id')
+            self.shakeout_invoice_ref = data.get('invoice_ref')
+            self.shakeout_data = data
+            self.shakeout_created_at = timezone.now()
+            self.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at'])
+            # Fix: Use 'url' instead of 'payment_url' to match Shake-out API response
+            return data.get('url')
+        return None
+
+    def check_shakeout_payment(self):
+        """Check payment status with Shake-out"""
+        if not self.shakeout_invoice_id:
+            return None, "No Shake-out invoice associated"
+            
+        from services.shakeout_service import shakeout_service
+        
+        payment_data = shakeout_service.check_payment_status(self.shakeout_invoice_id)
+        
+        if payment_data['success']:
+            # Payment status updates will come via webhooks
+            return payment_data, None
+        return None, payment_data.get('error')
+
+    @property
+    def shakeout_payment_url(self):
+        """Get Shake-out payment URL if exists"""
+        if self.shakeout_data:
+            # Fix: Use 'url' instead of 'payment_url' to match Shake-out API response
+            return self.shakeout_data.get('url')
+        return None
+
+    @property
+    def shakeout_payment_status(self):
+        """Get Shake-out payment status"""
+        if not self.shakeout_invoice_id:
+            return "No invoice"
+        if self.paid:
+            return "Paid"
+        return "Pending"
+
+    def is_shakeout_invoice_expired(self):
+        """
+        Check if the current Shake-out invoice is expired or invalid
+        """
+        from datetime import timedelta
+        
+        if not self.shakeout_invoice_id or not self.shakeout_created_at:
+            return True  # No invoice or creation date means we can create a new one
+        
+        # Check if invoice is older than 30 days (Shake-out default expiry)
+        expiry_days = 30
+        expiry_date = self.shakeout_created_at + timedelta(days=expiry_days)
+        
+        if timezone.now() > expiry_date:
+            logger.info(f"Shake-out invoice {self.shakeout_invoice_id} for pill {self.pill_number} expired on {expiry_date}")
+            return True
+        
+        # Check if invoice status indicates it's no longer valid
+        if self.shakeout_data:
+            # Check webhook history for failure/expiry status
+            webhooks = self.shakeout_data.get('webhooks', [])
+            for webhook in reversed(webhooks):  # Check most recent first
+                webhook_status = webhook.get('invoice_status', '').lower()
+                if webhook_status in ['expired', 'cancelled', 'failed']:
+                    logger.info(f"Shake-out invoice {self.shakeout_invoice_id} for pill {self.pill_number} has status: {webhook_status}")
+                    return True
+        
+        return False
+
+    def _update_pill_item_prices(self, item):
+        """Helper method to update prices and sale date on a pill item"""
+        if item.status in ['p', 'd']:
+            if not item.date_sold:
+                item.date_sold = timezone.now()
+
+            if not item.price_at_sale:
+                item.price_at_sale = item.product.discounted_price()
+
+            if not item.native_price_at_sale:
+                availability = item.product.availabilities.filter(
+                    size=item.size,
+                    color=item.color
+                ).first()
+                item.native_price_at_sale = availability.native_price if availability else 0
+
+    def restore_inventory(self):
+        """Restore inventory quantities for all items in the pill"""
+        with transaction.atomic():
+            for item in self.items.all():
+                try:
+                    availability = ProductAvailability.objects.select_for_update().get(
+                        product=item.product,
+                        size=item.size,
+                        color=item.color
+                    )
+                    availability.quantity += item.quantity
+                    availability.save()
+                except ProductAvailability.DoesNotExist:
+                    continue
+
+    def process_delivery(self):
+        """Process items when pill is marked as delivered"""
+        with transaction.atomic():
+            for item in self.items.all():
+                try:
+                    color = item.color if item.color else None
+                    availability = ProductAvailability.objects.select_for_update().get(
+                        product=item.product,
+                        size=item.size,
+                        color=color
+                    )
+                    if availability.quantity < item.quantity:
+                        raise ValidationError(
+                            f"Not enough inventory for {item.product.name} "
+                            f"(Size: {item.size}, Color: {item.color.name if item.color else 'N/A'}). "
+                            f"Required: {item.quantity}, Available: {availability.quantity}"
+                        )
+                    availability.quantity -= item.quantity
+                    availability.save()
+                    self._update_pill_item_prices(item)
+                    item.save()
+                except ProductAvailability.DoesNotExist:
+                    raise ValidationError(
+                        f"Inventory record for {item.product.name} "
+                        f"(Size: {item.size}, Color: {item.color.name if item.color else 'N/A'}) not found."
+                    )
+
+    def send_payment_notification(self):
+        """Send payment confirmation if phone exists"""
+        if hasattr(self, 'pilladdress') and self.pilladdress.phone:
+            prepare_whatsapp_message(self.pilladdress.phone, self)
+
+    def price_without_coupons_or_gifts(self):
+        return sum(item.product.discounted_price() * item.quantity for item in self.items.all())
+
+    def calculate_coupon_discount(self):
+        if self.coupon:
+            now = timezone.now()
+            if self.coupon.coupon_start <= now <= self.coupon.coupon_end:
+                return self.price_without_coupons_or_gifts() * (self.coupon.discount_value / 100)
+        return 0.0
+
+    def calculate_gift_discount(self):
+        if self.gift_discount and self.gift_discount.is_available(self.price_without_coupons_or_gifts()):
+            return self.price_without_coupons_or_gifts() * (self.gift_discount.discount_value / 100)
+        return 0.0
+
+    def shipping_price(self):
+        if hasattr(self, 'pilladdress'):
+            try:
+                shipping = Shipping.objects.filter(government=self.pilladdress.government).first()
+                return shipping.shipping_price if shipping else 0.0
+            except:
+                return 0.0
+        return 0.0
+
+    def final_price(self):
+        base_price = self.price_without_coupons_or_gifts()
+        gift_discount = self.calculate_gift_discount()
+        coupon_discount = self.calculate_coupon_discount()
+        return max(0, base_price - gift_discount - coupon_discount) + self.shipping_price()
+
+    def apply_gift_discount(self):
+        """Apply the best active PillGift discount based on total price."""
+        if self.paid or self.status == 'd':
+            self.gift_discount = None
+            self.save()
+            return None
+
+        total = self.price_without_coupons_or_gifts()
+        if total <= 0:
+            self.gift_discount = None
+            self.save()
+            return None
+
+        applicable_gifts = PillGift.objects.filter(
+            is_active=True,
+            min_order_value__lte=total
+        ).filter(
+            models.Q(max_order_value__isnull=True) | models.Q(max_order_value__gte=total)
+        ).filter(
+            models.Q(start_date__isnull=True) | models.Q(start_date__lte=timezone.now())
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-discount_value', '-id')
+
+        if self.gift_discount and not self.gift_discount.is_available(total):
+            self.gift_discount = None
+
+        gift = applicable_gifts.first()
+        if gift:
+            self.gift_discount = gift
+            self.save()
+            return gift
+        if not self.gift_discount:
+            self.save()
+        return None
+
+    class Meta:
+        verbose_name_plural = 'Bills'
+        ordering = ['-date_added']
+        indexes = [
+            # Essential indexes for your API performance
+            models.Index(fields=['-date_added']),  # Primary ordering
+            models.Index(fields=['status']),       # Status filtering
+            models.Index(fields=['paid']),         # Payment status
+            models.Index(fields=['pill_number']),  # Unique lookups
+            models.Index(fields=['user_id']),      # User filtering
+            models.Index(fields=['date_added', 'status']),  # Composite for common filters
+            models.Index(fields=['date_added', 'paid']),    # Date + payment status
+        ]
+
+    def __str__(self):
+        return f"Pill ID: {self.id} - Status: {self.get_status_display()} - Date: {self.date_added}"
+
+class PillAddress(models.Model):
+    pill = models.OneToOneField(Pill, on_delete=models.CASCADE, related_name='pilladdress')
+    name = models.CharField(max_length=150, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    phone = models.CharField(max_length=15, null=True, blank=True)
+    address = models.CharField(max_length=255, null=True, blank=True)
+    government = models.CharField(choices=GOVERNMENT_CHOICES, max_length=2, null=True, blank=True)
+    city = models.CharField(max_length=100, null=True, blank=True)
+    pay_method = models.CharField(choices=PAYMENT_CHOICES, max_length=2, default="c")
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} - {self.address}"
+
+class PillStatusLog(models.Model):
+    pill = models.ForeignKey(Pill, on_delete=models.CASCADE, related_name='status_logs')
+    status = models.CharField(choices=PILL_STATUS_CHOICES, max_length=2)
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at'] 
+
+    def __str__(self):
+        return f"{self.pill.id} - {self.get_status_display()} at {self.changed_at}"
+    
+class CouponDiscount(models.Model):
+    coupon = models.CharField(max_length=100, blank=True, null=True, editable=False)
+    discount_value = models.FloatField(null=True, blank=True)
+    coupon_start = models.DateTimeField(null=True, blank=True)
+    coupon_end = models.DateTimeField(null=True, blank=True)
+    available_use_times = models.PositiveIntegerField(default=1)
+    is_wheel_coupon = models.BooleanField(default=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    min_order_value = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    def save(self, *args, **kwargs):
+        if not self.coupon:
+            self.coupon = create_random_coupon()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.coupon
+
+    class Meta:
+        ordering = ['-created_at']
+
+class Rating(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='ratings'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE
+    )
+    star_number = models.IntegerField()
+    review = models.CharField(max_length=300, default="No review comment")
+    date_added = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.star_number} stars for {self.product.name} by {self.user.username}"
+
+    def star_ranges(self):
+        return range(int(self.star_number)), range(5 - int(self.star_number))
+
+    class Meta:
+        ordering = ['-date_added'] 
+
+class Discount(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True, related_name='discounts')
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, null=True, blank=True, related_name='discounts')
+    discount = models.FloatField(validators=[MinValueValidator(0), MaxValueValidator(100)])
+    discount_start = models.DateTimeField()
+    discount_end = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target = f"Product: {self.product.name}" if self.product else f"Category: {self.category.name}"
+        return f"{self.discount}% discount on {target}"
+
+    def clean(self):
+        if not self.product and not self.category:
+            raise ValidationError("Either product or category must be set")
+        if self.product and self.category:
+            raise ValidationError("Cannot set both product and category")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_currently_active(self):
+        now = timezone.now()
+        return self.is_active and self.discount_start <= now <= self.discount_end
+
+class PayRequest(models.Model):
+    pill = models.ForeignKey('Pill', on_delete=models.CASCADE, related_name='pay_requests')
+    image = models.ImageField(upload_to='pay_requests/')
+    date = models.DateTimeField(auto_now_add=True)
+    is_applied = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"PayRequest for Pill {self.pill.id} - Applied: {self.is_applied}"
+    class Meta:
+        ordering = ['-date'] 
+
+class LovedProduct(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='loved_products',
+        null=True,
+        blank=True
+    )
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'product']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.product.name} loved by {self.user.username if self.user else 'anonymous'}"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class StockAlert(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_notified = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [
+            ['product', 'user'],
+            ['product', 'email']
+        ]
+        ordering = ['-created_at']
+
+class PriceDropAlert(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    last_price = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_notified = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [
+            ['product', 'user'],
+            ['product', 'email']
+        ]
+        ordering = ['-created_at'] 
+
+class SpinWheelDiscount(models.Model):
+    name = models.CharField(max_length=100)
+    discount_value = models.FloatField(
+        default=0.0,
+        help_text="Discount value for the coupon created upon winning"
+    )
+    probability = models.FloatField(
+        default=0.1,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text="Probability of winning (0 to 1)"
+    )
+    is_active = models.BooleanField(default=True)
+    start_date = models.DateTimeField()
+    end_date = models.DateTimeField()
+    min_order_value = models.FloatField(
+        default=0,
+        help_text="Minimum order value to claim the prize"
+    )
+    max_winners = models.PositiveIntegerField(
+        default=100,
+        help_text="Maximum number of users who can win this discount"
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    def __str__(self):
+        return f"{self.name} (Winners: {self.winner_count()}/{self.max_winners})"
+
+    class Meta:
+        ordering = ['-created_at']
+    def is_available(self):
+        now = timezone.now()
+        return (
+            self.is_active and
+            self.start_date <= now <= self.end_date and
+            self.winner_count() < self.max_winners
+        )
+
+    def winner_count(self):
+        return SpinWheelResult.objects.filter(spin_wheel=self, coupon__isnull=False).count()
+
+class SpinWheelResult(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    spin_wheel = models.ForeignKey(SpinWheelDiscount, on_delete=models.CASCADE)
+    coupon = models.ForeignKey(CouponDiscount, null=True, blank=True, on_delete=models.SET_NULL)
+    spin_date_time = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'spin_wheel', 'spin_date_time']
+        ordering = ['-spin_date_time']
+
+    def __str__(self):
+        return f"{self.user.username} spun {self.spin_wheel.name} on {self.spin_date_time}"
+
+class SpinWheelSettings(models.Model):
+    daily_spin_limit = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum spins per user per day"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Spin Wheel Settings"
+        verbose_name_plural = "Spin Wheel Settings"
+
+    def __str__(self):
+        return f"Daily Spin Limit: {self.daily_spin_limit}"
+
+    @classmethod
+    def get_settings(cls):
+        return cls.objects.first() or cls.objects.create()
+
+class PillGift(models.Model):
+    discount_value = models.FloatField(
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Discount percentage (0-100)"
+    )
+    start_date = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Start date the gift becomes available (null means always available until end_date)"
+    )
+    end_date = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="End date of the gift (null means available indefinitely from start_date)"
+    )
+    is_active = models.BooleanField(default=True)
+    min_order_value = models.FloatField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Minimum order value to apply the gift"
+    )
+    max_order_value = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Maximum order value to apply the gift (optional)"
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        verbose_name = "Pill Gift"
+        verbose_name_plural = "Pill Gifts"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        start_str = self.start_date.strftime("%Y-%m-%d") if self.start_date else "Any"
+        end_str = self.end_date.strftime("%Y-%m-%d") if self.end_date else "Forever"
+        return f"{self.discount_value}% Gift ({start_str} to {end_str})"
+
+    def is_available(self, order_value):
+        now = timezone.now()
+        if not self.is_active:
+            return False
+        if self.start_date and now < self.start_date:
+            return False
+        if self.end_date and now > self.end_date:
+            return False
+        if order_value < self.min_order_value:
+            return False
+        if self.max_order_value and order_value > self.max_order_value:
+            return False
+        return True
+
+
+class KhazenlyWebhookLog(models.Model):
+    """
+    Model to store all incoming requests to Khazenly webhook endpoints
+    All fields are nullable to prevent errors during logging
+    """
+    # Request metadata
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+    method = models.CharField(max_length=10, null=True, blank=True)
+    url_path = models.TextField(null=True, blank=True)
+    query_params = models.TextField(null=True, blank=True)
+    
+    # Request source information
+    remote_addr = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(null=True, blank=True)
+    referer = models.TextField(null=True, blank=True)
+    x_forwarded_for = models.TextField(null=True, blank=True)
+    x_real_ip = models.TextField(null=True, blank=True)
+    
+    # Request content
+    headers = models.JSONField(null=True, blank=True, default=dict)
+    body = models.TextField(null=True, blank=True)
+    content_type = models.CharField(max_length=100, null=True, blank=True)
+    content_length = models.IntegerField(null=True, blank=True)
+    
+    # Response information
+    response_status = models.IntegerField(null=True, blank=True)
+    response_body = models.TextField(null=True, blank=True)
+    response_headers = models.JSONField(null=True, blank=True, default=dict)
+    processing_time_ms = models.IntegerField(null=True, blank=True)
+    
+    # Processing details
+    pill_found = models.BooleanField(null=True, blank=True)
+    pill_number = models.CharField(max_length=100, null=True, blank=True)
+    status_updated = models.BooleanField(null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    hmac_verified = models.BooleanField(null=True, blank=True)
+    
+    # Webhook payload fields for quick access
+    webhook_status = models.CharField(max_length=100, null=True, blank=True)
+    order_reference = models.CharField(max_length=100, null=True, blank=True)
+    merchant_reference = models.CharField(max_length=100, null=True, blank=True)
+    order_supplier_id = models.CharField(max_length=100, null=True, blank=True)
+    
+    class Meta:
+        verbose_name = "Khazenly Webhook Log"
+        verbose_name_plural = "Khazenly Webhook Logs"
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['timestamp']),
+            models.Index(fields=['response_status']),
+            models.Index(fields=['pill_number']),
+            models.Index(fields=['order_reference']),
+            models.Index(fields=['merchant_reference']),
+            models.Index(fields=['remote_addr']),
+        ]
+
+    def __str__(self):
+        status = f"HTTP {self.response_status}" if self.response_status else "Unknown"
+        method = self.method or "Unknown"
+        timestamp = self.timestamp.strftime("%Y-%m-%d %H:%M:%S") if self.timestamp else "Unknown"
+        return f"{method} {status} - {timestamp}"
+
+    def save(self, *args, **kwargs):
+        """Override save to handle any potential errors gracefully"""
+        try:
+            super().save(*args, **kwargs)
+        except Exception as e:
+            # Log the error but don't raise it to prevent webhook failures
+            logger.error(f"Failed to save KhazenlyWebhookLog: {e}")
+
+    @property
+    def is_successful(self):
+        """Returns True if the response was successful (2xx status)"""
+        return self.response_status and 200 <= self.response_status < 300
+
+    @property
+    def duration_display(self):
+        """Returns human-readable processing time"""
+        if self.processing_time_ms is None:
+            return "Unknown"
+        if self.processing_time_ms < 1000:
+            return f"{self.processing_time_ms}ms"
+        else:
+            return f"{self.processing_time_ms / 1000:.2f}s"
+
+    @classmethod
+    def log_request(cls, request, response_data=None, processing_time_ms=None, **extra_data):
+        """
+        Utility method to safely log webhook requests
+        All parameters are optional to prevent errors
+        """
+        try:
+            # Extract headers safely
+            headers = {}
+            try:
+                headers = dict(request.headers)
+            except Exception:
+                headers = {}
+
+            # Extract body safely
+            body = None
+            try:
+                if hasattr(request, 'body'):
+                    body = request.body.decode('utf-8') if request.body else None
+            except Exception:
+                body = str(request.body) if hasattr(request, 'body') else None
+
+            # Extract IP address safely
+            remote_addr = None
+            try:
+                remote_addr = request.META.get('REMOTE_ADDR')
+            except Exception:
+                pass
+
+            # Extract other metadata safely
+            user_agent = None
+            try:
+                user_agent = request.META.get('HTTP_USER_AGENT')
+            except Exception:
+                pass
+
+            x_forwarded_for = None
+            try:
+                x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            except Exception:
+                pass
+
+            x_real_ip = None
+            try:
+                x_real_ip = request.META.get('HTTP_X_REAL_IP')
+            except Exception:
+                pass
+
+            # Create log entry with all nullable fields
+            log_entry = cls(
+                method=getattr(request, 'method', None),
+                url_path=getattr(request, 'path', None),
+                query_params=getattr(request, 'META', {}).get('QUERY_STRING', None),
+                remote_addr=remote_addr,
+                user_agent=user_agent,
+                x_forwarded_for=x_forwarded_for,
+                x_real_ip=x_real_ip,
+                headers=headers,
+                body=body,
+                content_type=request.META.get('CONTENT_TYPE', None) if hasattr(request, 'META') else None,
+                processing_time_ms=processing_time_ms,
+                **extra_data
+            )
+
+            # Add response data if provided
+            if response_data:
+                if hasattr(response_data, 'status_code'):
+                    log_entry.response_status = response_data.status_code
+                if hasattr(response_data, 'content'):
+                    try:
+                        log_entry.response_body = response_data.content.decode('utf-8')
+                    except Exception:
+                        log_entry.response_body = str(response_data.content)
+
+            log_entry.save()
+            return log_entry
+
+        except Exception as e:
+            # Log the error but don't raise it
+            logger.error(f"Failed to create KhazenlyWebhookLog: {e}")
+            return None
+
+
+def prepare_whatsapp_message(phone_number, pill):
+    print(f"Preparing WhatsApp message for phone number: {phone_number}")
+    message = (
+        f"مرحباً {pill.user.username}،\n\n"
+        f"تم استلام طلبك بنجاح.\n\n"
+        f"رقم الطلب: {pill.pill_number}\n"
+    )
+    send_whatsapp_message(
+        phone_number=phone_number,
+        message=message
+    )
