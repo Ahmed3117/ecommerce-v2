@@ -17,6 +17,28 @@ from django.contrib.auth import update_session_auth_hash
 from rest_framework import generics
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Count
+from permissions import IsAdminOrHasEndpointPermission
+
+
+def get_user_permissions(user):
+    """Helper function to get user permissions"""
+    try:
+        # Import here to avoid app loading issues
+        from permissions.models import UserPermission
+        user_permission = UserPermission.objects.get(user=user)
+        allowed_endpoints = user_permission.get_allowed_endpoints()
+        
+        permissions = []
+        for endpoint in allowed_endpoints:
+            permissions.append({
+                'url': endpoint.url,
+                'method': endpoint.method
+            })
+        
+        return permissions
+    except Exception:
+        # UserPermission.DoesNotExist or import error
+        return []  # Return empty if permissions app not available or user has no permissions
 
 
 @api_view(['POST'])
@@ -28,6 +50,11 @@ def signup(request):
         refresh = RefreshToken.for_user(user)
         user_data = serializer.data
         user_data['is_admin'] = user.is_staff or user.is_superuser
+        
+        # Get user permissions (will be empty for new users)
+        user_permissions = get_user_permissions(user)
+        user_data['permissions'] = user_permissions
+        
         return Response({
             'refresh': str(refresh),
             'access': str(refresh.access_token),
@@ -51,6 +78,10 @@ def signin(request):
         serializer = UserSerializer(user, context={'request': request})
         user_data = serializer.data
         user_data['is_admin'] = user.is_staff or user.is_superuser
+        
+        # Get user permissions
+        user_permissions = get_user_permissions(user)
+        user_data['permissions'] = user_permissions
 
         return Response({
             'refresh': str(refresh),
@@ -211,7 +242,7 @@ def create_admin_user(request):
 
 
 class UserCreateAPIView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdminOrHasEndpointPermission]
 
     def post(self, request):
         serializer = UserSerializer(data=request.data)
@@ -221,7 +252,7 @@ class UserCreateAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class UserUpdateAPIView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdminOrHasEndpointPermission]
 
     def patch(self, request, username):  # Changed from pk to username
         try:
