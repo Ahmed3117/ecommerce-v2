@@ -41,6 +41,27 @@ def get_user_permissions(user):
         return []  # Return empty if permissions app not available or user has no permissions
 
 
+def get_user_frontend_pages(user):
+    """Helper function to get user frontend pages"""
+    try:
+        # Import here to avoid app loading issues
+        from permissions.models import AllowedFrontEndPage
+        allowed_pages = AllowedFrontEndPage.objects.filter(user=user).select_related('frontendpage')
+        
+        allowed_frontend_pages = []
+        for allowed_page in allowed_pages:
+            allowed_frontend_pages.append({
+                'id': allowed_page.frontendpage.id,
+                'title': allowed_page.frontendpage.title,
+                'url': allowed_page.frontendpage.url
+            })
+        
+        return allowed_frontend_pages
+    except Exception:
+        # Import error or other issues
+        return []  # Return empty if permissions app not available
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def signup(request):
@@ -54,6 +75,10 @@ def signup(request):
         # Get user permissions (will be empty for new users)
         user_permissions = get_user_permissions(user)
         user_data['permissions'] = user_permissions
+        
+        # Get user frontend pages (will be empty for new users)
+        user_frontend_pages = get_user_frontend_pages(user)
+        user_data['allowed_frontend_pages'] = user_frontend_pages
         
         return Response({
             'refresh': str(refresh),
@@ -82,6 +107,10 @@ def signin(request):
         # Get user permissions
         user_permissions = get_user_permissions(user)
         user_data['permissions'] = user_permissions
+        
+        # Get user frontend pages
+        user_frontend_pages = get_user_frontend_pages(user)
+        user_data['allowed_frontend_pages'] = user_frontend_pages
 
         return Response({
             'refresh': str(refresh),
@@ -314,7 +343,7 @@ class AdminUserListView(generics.ListAPIView):
         'loved_count'
     ]
     search_fields = ['username', 'name', 'email', 'phone','address', 'government', 'city']
-    filterset_fields = ['is_staff', 'is_superuser','year', 'government']
+    filterset_fields = ['is_staff', 'is_superuser','year', 'division', 'government']
 
 
 class AdminUserDetailView(generics.RetrieveAPIView):

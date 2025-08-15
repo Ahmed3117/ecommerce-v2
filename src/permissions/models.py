@@ -46,6 +46,45 @@ class AllowedEndpointGroup(models.Model):
         return self.name
 
 
+class FrontEndPage(models.Model):
+    """Model to store frontend pages information"""
+    title = models.CharField(max_length=255, help_text="Page title")
+    url = models.CharField(max_length=255, unique=True, help_text="Frontend page URL/route")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Frontend Page"
+        verbose_name_plural = "Frontend Pages"
+        ordering = ['title']
+    
+    def __str__(self):
+        return f"{self.title} ({self.url})"
+
+
+class AllowedFrontEndPage(models.Model):
+    """Model to assign frontend page permissions to users"""
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='allowed_frontend_pages'
+    )
+    frontendpage = models.ForeignKey(
+        FrontEndPage,
+        on_delete=models.CASCADE,
+        related_name='allowed_users'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ('user', 'frontendpage')
+        verbose_name = "Allowed Frontend Page"
+        verbose_name_plural = "Allowed Frontend Pages"
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.frontendpage.title}"
+
+
 class UserPermission(models.Model):
     """Model to assign permissions to users either directly or through groups"""
     user = models.OneToOneField(

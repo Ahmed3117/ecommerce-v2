@@ -43,6 +43,14 @@ YEAR_CHOICES = [
         ('third-secondary', 'Third Secondary'),
     ]
 
+DIVISION_CHOICES = [
+    ('1', 'علمى'),
+    ('2', 'ادبى'),
+    ('3', 'علمى علوم'),
+    ('4', 'علمى رياضة'),
+
+]
+
 class UserProfileImage(models.Model):
     image = models.ImageField(upload_to='profile_images/')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -70,6 +78,12 @@ class User(AbstractUser):
         null=True,
         blank=True,
         help_text="Only applicable for students"
+    )
+    division = models.CharField(
+        max_length=20,
+        choices=DIVISION_CHOICES,
+        null=True,
+        blank=True
     )
     government = models.CharField(choices=GOVERNMENT_CHOICES, max_length=2, null=True, blank=True)
     city = models.CharField(max_length=100, null=True, blank=True)
