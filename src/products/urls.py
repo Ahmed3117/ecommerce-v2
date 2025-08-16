@@ -3,6 +3,7 @@ from django.urls import path
 from products import payment_views
 from products.khazenly_webhooks import khazenly_order_status_webhook
 from products.shakeout_webhooks import shakeout_webhook  # Add Shake-out webhook import
+from products.easypay_webhooks import easypay_webhook  # Add EasyPay webhook import
 from . import views
 
 app_name = 'products'
@@ -131,8 +132,15 @@ urlpatterns = [
     path('api/webhook/khazenly/order-status/', khazenly_order_status_webhook, name='khazenly_order_status_webhook'),
     # Shake-out Webhook
     path('api/webhook/shakeout/', shakeout_webhook, name='shakeout_webhook'),
+    # EasyPay Webhook
+    path('api/webhook/easypay/', easypay_webhook, name='easypay_webhook'),
+    path('api/webhook/easypay/<str:api_key>/', easypay_webhook, name='easypay_webhook_with_key'),
     # Shake-out Invoice Creation Endpoint
     path('pills/<int:pill_id>/create-shakeout-invoice/', payment_views.create_shakeout_invoice_view, name='create_shakeout_invoice'),
+    # EasyPay Invoice Creation Endpoint
+    path('pills/<int:pill_id>/create-easypay-invoice/', payment_views.create_easypay_invoice_view, name='create_easypay_invoice'),
+    # Generic Payment Invoice Creation Endpoint
+    path('pills/<int:pill_id>/create-payment-invoice/', payment_views.create_payment_invoice_view, name='create_payment_invoice'),
     
     # Khazenly 
     path('api/resend-khazenly-orders/', views.resend_khazenly_orders_view, name='resend_khazenly_orders'),

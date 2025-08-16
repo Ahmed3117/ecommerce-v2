@@ -72,6 +72,12 @@ PAYMENT_CHOICES = [
     ('v', 'visa'),
 ]
 
+PAYMENT_GATEWAY_CHOICES = [
+    ('shakeout', 'Shake-out'),
+    ('easypay', 'EasyPay'),
+    ('manual', 'Manual'),
+]
+
 def generate_pill_number():
     """Generate a unique 20-digit pill number."""
     while True:
@@ -515,6 +521,21 @@ class Pill(models.Model):
     shakeout_data = models.JSONField(null=True, blank=True, help_text="Shake-out invoice response data")
     shakeout_created_at = models.DateTimeField(null=True, blank=True, help_text="When the Shake-out invoice was created")
     
+    # EasyPay fields
+    easypay_invoice_uid = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice UID")
+    easypay_invoice_sequence = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice sequence")
+    easypay_data = models.JSONField(null=True, blank=True, help_text="EasyPay invoice response data")
+    easypay_created_at = models.DateTimeField(null=True, blank=True, help_text="When the EasyPay invoice was created")
+    
+    # Payment gateway tracking
+    payment_gateway = models.CharField(
+        max_length=20, 
+        choices=PAYMENT_GATEWAY_CHOICES, 
+        null=True, 
+        blank=True, 
+        help_text="Which payment gateway was used for this pill"
+    )
+    
     def save(self, *args, **kwargs):
         if not self.pill_number:
             self.pill_number = generate_pill_number()
@@ -725,10 +746,39 @@ class Pill(models.Model):
             self.shakeout_invoice_ref = data.get('invoice_ref')
             self.shakeout_data = data
             self.shakeout_created_at = timezone.now()
-            self.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at'])
+            self.payment_gateway = 'shakeout'
+            self.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at', 'payment_gateway'])
             # Fix: Use 'url' instead of 'payment_url' to match Shake-out API response
             return data.get('url')
         return None
+
+    def create_easypay_invoice(self):
+        """Create an EasyPay invoice for this pill"""
+        from services.easypay_service import easypay_service
+        
+        result = easypay_service.create_payment_invoice(self)
+        
+        if result['success']:
+            data = result['data']
+            self.easypay_invoice_uid = data.get('invoice_uid')
+            self.easypay_invoice_sequence = data.get('invoice_sequence')
+            self.easypay_data = data
+            self.easypay_created_at = timezone.now()
+            self.payment_gateway = 'easypay'
+            self.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+            return data.get('payment_url')
+        return None
+
+    def create_payment_invoice(self):
+        """Create a payment invoice using the active payment gateway"""
+        from django.conf import settings
+        
+        active_method = getattr(settings, 'ACTIVE_PAYMENT_METHOD', 'shakeout').lower()
+        
+        if active_method == 'easypay':
+            return self.create_easypay_invoice()
+        else:  # Default to shakeout
+            return self.create_shakeout_invoice()
 
     def check_shakeout_payment(self):
         """Check payment status with Shake-out"""
@@ -743,6 +793,40 @@ class Pill(models.Model):
             # Payment status updates will come via webhooks
             return payment_data, None
         return None, payment_data.get('error')
+
+    def check_easypay_payment(self):
+        """Check payment status with EasyPay"""
+        if not self.easypay_invoice_uid or not self.easypay_invoice_sequence:
+            return None, "No EasyPay invoice associated"
+            
+        from services.easypay_service import easypay_service
+        
+        payment_data = easypay_service.check_payment_status(self.easypay_invoice_uid, self.easypay_invoice_sequence)
+        
+        if payment_data['success']:
+            # Update payment status if needed
+            invoice_data = payment_data['data']['invoice_data']
+            payment_status = invoice_data.get('payment_status', 'unknown')
+            if payment_status.lower() == 'paid' and not self.paid:
+                self.paid = True
+                self.status = 'p'  # Set to paid status
+                self.save(update_fields=['paid', 'status'])
+            return payment_data, None
+        return None, payment_data.get('error')
+
+    def check_payment_status(self):
+        """Check payment status using the appropriate gateway"""
+        if self.payment_gateway == 'easypay':
+            return self.check_easypay_payment()
+        elif self.payment_gateway == 'shakeout':
+            return self.check_shakeout_payment()
+        else:
+            # Try both if gateway is not set
+            if self.easypay_invoice_uid:
+                return self.check_easypay_payment()
+            elif self.shakeout_invoice_id:
+                return self.check_shakeout_payment()
+            return None, "No payment invoice found"
 
     @property
     def shakeout_payment_url(self):
@@ -760,6 +844,49 @@ class Pill(models.Model):
         if self.paid:
             return "Paid"
         return "Pending"
+
+    @property
+    def easypay_payment_url(self):
+        """Get EasyPay payment URL if exists"""
+        if self.easypay_data:
+            return self.easypay_data.get('payment_url')
+        return None
+
+    @property
+    def easypay_payment_status(self):
+        """Get EasyPay payment status"""
+        if not self.easypay_invoice_uid:
+            return "No invoice"
+        if self.paid:
+            return "Paid"
+        return "Pending"
+
+    @property
+    def payment_url(self):
+        """Get payment URL for the active gateway"""
+        if self.payment_gateway == 'easypay':
+            return self.easypay_payment_url
+        elif self.payment_gateway == 'shakeout':
+            return self.shakeout_payment_url
+        else:
+            # Try both if gateway is not set
+            return self.easypay_payment_url or self.shakeout_payment_url
+
+    @property
+    def payment_status(self):
+        """Get payment status for the active gateway"""
+        if self.payment_gateway == 'easypay':
+            return self.easypay_payment_status
+        elif self.payment_gateway == 'shakeout':
+            return self.shakeout_payment_status
+        else:
+            # Return generic status
+            if self.paid:
+                return "Paid"
+            elif self.easypay_invoice_uid or self.shakeout_invoice_id:
+                return "Pending"
+            else:
+                return "No invoice"
 
     def is_shakeout_invoice_expired(self):
         """
@@ -789,6 +916,46 @@ class Pill(models.Model):
                     return True
         
         return False
+
+    def is_easypay_invoice_expired(self):
+        """
+        Check if the current EasyPay invoice is expired or invalid
+        """
+        from datetime import timedelta
+        
+        if not self.easypay_invoice_uid or not self.easypay_created_at:
+            return True  # No invoice or creation date means we can create a new one
+        
+        # Check if invoice is older than 2 days (default payment expiry from settings)
+        from django.conf import settings
+        expiry_ms = getattr(settings, 'EASYPAY_PAYMENT_EXPIRY', 172800000)  # 48 hours in milliseconds
+        expiry_hours = expiry_ms / (1000 * 60 * 60)  # Convert to hours
+        expiry_date = self.easypay_created_at + timedelta(hours=expiry_hours)
+        
+        if timezone.now() > expiry_date:
+            logger.info(f"EasyPay invoice {self.easypay_invoice_uid} for pill {self.pill_number} expired on {expiry_date}")
+            return True
+        
+        # Check if invoice status indicates it's no longer valid
+        if self.easypay_data and 'invoice_details' in self.easypay_data:
+            payment_status = self.easypay_data['invoice_details'].get('payment_status', '').lower()
+            if payment_status in ['expired', 'cancelled', 'failed']:
+                logger.info(f"EasyPay invoice {self.easypay_invoice_uid} for pill {self.pill_number} has status: {payment_status}")
+                return True
+        
+        return False
+
+    def is_payment_invoice_expired(self):
+        """Check if the current payment invoice is expired"""
+        if self.payment_gateway == 'easypay':
+            return self.is_easypay_invoice_expired()
+        elif self.payment_gateway == 'shakeout':
+            return self.is_shakeout_invoice_expired()
+        else:
+            # Check both if gateway is not set
+            return (self.is_easypay_invoice_expired() if self.easypay_invoice_uid 
+                   else True) and (self.is_shakeout_invoice_expired() if self.shakeout_invoice_id 
+                   else True)
 
     def _update_pill_item_prices(self, item):
         """Helper method to update prices and sale date on a pill item"""

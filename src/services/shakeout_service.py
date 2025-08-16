@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 class ShakeoutService:
     def __init__(self):
         # Shake-out API configuration
-        self.api_key = getattr(settings, 'SHAKEOUT_API_KEY', '68909b3acd8cbojjCbFOPPJlGvwVTHSWKXxehYTJeFEuATalS1U1D')
-        self.secret_key = getattr(settings, 'SHAKEOUT_SECRET_KEY', '9aa639b63b2a4c3182f73771fb2e11df')
+        self.api_key = getattr(settings, 'SHAKEOUT_API_KEY', '')
+        self.secret_key = getattr(settings, 'SHAKEOUT_SECRET_KEY', '')
         self.base_url = getattr(settings, 'SHAKEOUT_BASE_URL', 'https://dash.shake-out.com/api/public/vendor')
         self.create_invoice_url = f"{self.base_url}/invoice"
         

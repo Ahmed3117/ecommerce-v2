@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 #^ SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['localhost','127.0.0.1','13.49.226.161','api2.bookefay.com']
 
@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'products',
     'store',
     'analysis',
+    'permissions',
 
 ]
 
@@ -83,7 +84,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-"""
+
 #^ DATABASES
 DATABASES = {
     'default': {
@@ -91,18 +92,17 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-"""
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME': os.getenv('DATABASE_NAME'),
-        'USER': os.getenv('DATABASE_USER'),
-        'PASSWORD': os.getenv('DATABASE_PASSWORD'),
-        'HOST': 'localhost',
-        'PORT': '5432',
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql_psycopg2',
+#         'NAME': os.getenv('DATABASE_NAME'),
+#         'USER': os.getenv('DATABASE_USER'),
+#         'PASSWORD': os.getenv('DATABASE_PASSWORD'),
+#         'HOST': 'localhost',
+#         'PORT': '5432',
+#     }
+# }
 
 
 #^ Password validation
@@ -266,17 +266,31 @@ KHAZENLY_WEBHOOK_SECRET = os.getenv('KHAZENLY_HMAC_SECRET', '')  # Updated to us
 KHAZENLY_HMAC_SECRET = os.getenv('KHAZENLY_HMAC_SECRET', '')  # Additional reference for clarity
 
 
-# Fawaterak Configuration - with fallbacks and validation
+# Payment Gateway Configuration
+ACTIVE_PAYMENT_METHOD = os.getenv('ACTIVE_PAYMENT_METHOD', 'shakeout').lower()  # 'shakeout' or 'easypay'
+
 # Site URL
 SITE_URL = os.getenv('SITE_URL', 'https://api2.bookefay.com')
+
 # Shake-out Configuration - with fallbacks and validation
 SUCCESS_URL = os.getenv('SUCCESS_URL', 'http://bookefay.com/payment-redirect/success/')
 FAIL_URL = os.getenv('FAIL_URL', 'http://bookefay.com/payment-redirect/fail/')
 PENDING_URL = os.getenv('PENDING_URL', 'http://bookefay.com/payment-redirect/pending') 
-SHAKEOUT_API_KEY = os.getenv('SHAKEOUT_API_KEY', '68909b3acd8cbojjCbFOPPJlGvwVTHSWKXxehYTJeFEuATalS1U1D')
-SHAKEOUT_SECRET_KEY = os.getenv('SHAKEOUT_SECRET_KEY', '9aa639b63b2a4c3182f73771fb2e11df')
+SHAKEOUT_API_KEY = os.getenv('SHAKEOUT_API_KEY', '')
+SHAKEOUT_SECRET_KEY = os.getenv('SHAKEOUT_SECRET_KEY', '')
 SHAKEOUT_BASE_URL = os.getenv('SHAKEOUT_BASE_URL', 'https://dash.shake-out.com/api/public/vendor')
 SHAKEOUT_WEBHOOK_URL = os.getenv('SHAKEOUT_WEBHOOK_URL', f'{SITE_URL}/api/webhook/shakeout/')
+
+# EasyPay Configuration
+EASYPAY_VENDOR_CODE = os.getenv('EASYPAY_VENDOR_CODE', '')
+EASYPAY_SECRET_KEY = os.getenv('EASYPAY_SECRET_KEY', '')
+EASYPAY_BASE_URL = os.getenv('EASYPAY_BASE_URL', 'https://api.easy-adds.com/api')
+EASYPAY_WEBHOOK_URL = os.getenv('EASYPAY_WEBHOOK_URL', f'{SITE_URL}/api/webhook/easypay/')
+EASYPAY_PAYMENT_METHOD = os.getenv('EASYPAY_PAYMENT_METHOD', 'fawry')  # Default payment method
+EASYPAY_PAYMENT_EXPIRY = int(os.getenv('EASYPAY_PAYMENT_EXPIRY', '172800000'))  # 48 hours in milliseconds
+
+# API Key for webhook authentication (same as used in e-learning system)
+API_KEY_MANASA = os.getenv('API_KEY_MANASA', 'your-secure-api-key-here')
 
 PILL_STATUS_URL = os.getenv('PILL_STATUS_URL', 'http://bookefay.com/profile/orders')
 
@@ -286,8 +300,15 @@ if not SHAKEOUT_API_KEY:
     import warnings
     warnings.warn("SHAKEOUT_API_KEY is not set in environment variables!")
 
+if not EASYPAY_VENDOR_CODE:
+    import warnings
+    warnings.warn("EASYPAY_VENDOR_CODE is not set in environment variables!")
+
+print(f"🔧 Active Payment Method: {ACTIVE_PAYMENT_METHOD}")
 print(f"🔧 Shake-out API Key loaded: {SHAKEOUT_API_KEY[:10] if SHAKEOUT_API_KEY else 'NOT SET'}...")
 print(f"🔧 Shake-out Base URL: {SHAKEOUT_BASE_URL}")
+print(f"🔧 EasyPay Vendor Code: {EASYPAY_VENDOR_CODE[:10] if EASYPAY_VENDOR_CODE else 'NOT SET'}...")
+print(f"🔧 EasyPay Base URL: {EASYPAY_BASE_URL}")
 print(f"🔧 Site URL: {SITE_URL}")
 print(f"🔧 PILL_STATUS_URL : {SUCCESS_URL}")
 
@@ -308,16 +329,10 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
-        'file': {
-            'level': 'DEBUG',
-            'class': 'logging.FileHandler',
-            'filename': '/var/log/khazenly/khazenly_debug.log',
-            'formatter': 'verbose',
-        },
     },
     'loggers': {
         '': {  # Root logger
-            'handlers': ['console', 'file'],
+            'handlers': ['console'],
             'level': 'DEBUG' if DEBUG else 'INFO',
         },
     },

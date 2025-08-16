@@ -994,17 +994,22 @@ class PillDetailSerializer(serializers.ModelSerializer):
     gift_discount = serializers.SerializerMethodField()
     final_price = serializers.SerializerMethodField()
     shakeout_invoice_url = serializers.SerializerMethodField()
+    easypay_invoice_url = serializers.SerializerMethodField()
+    payment_url = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
 
     class Meta:
         model = Pill
         fields = [
             'id','pill_number','tracking_number', 'user_name', 'user_username', 'user_phone','user_parent_phone' ,'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
-            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url'
+            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
+            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
         ]
         read_only_fields = [
             'id','pill_number', 'tracking_number','user_name', 'user_username', 'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
-            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url'
+            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
+            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
         ]
 
     def get_user_name(self, obj):
@@ -1042,8 +1047,17 @@ class PillDetailSerializer(serializers.ModelSerializer):
             return f"https://dash.shake-out.com/invoice/{obj.shakeout_invoice_id}/{obj.shakeout_invoice_ref}"
         return None
     
-
-
+    def get_easypay_invoice_url(self, obj):
+        if obj.easypay_invoice_uid and obj.easypay_invoice_sequence:
+            return f"https://dash.easy-adds.com/invoice/{obj.easypay_invoice_uid}/{obj.easypay_invoice_sequence}"
+        return None
+    
+    def get_payment_url(self, obj):
+        return obj.payment_url
+    
+    def get_payment_status(self, obj):
+        return obj.payment_status
+    
 
 class PillSerializer(serializers.ModelSerializer):
     coupon = CouponDiscountSerializer(read_only=True)
@@ -1069,6 +1083,9 @@ class PillSerializer(serializers.ModelSerializer):
     city = serializers.SerializerMethodField()
     pay_method = serializers.SerializerMethodField()
     shakeout_invoice_url = serializers.SerializerMethodField()
+    easypay_invoice_url = serializers.SerializerMethodField()
+    payment_url = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
 
     class Meta:
@@ -1079,14 +1096,18 @@ class PillSerializer(serializers.ModelSerializer):
             'status_display', 'date_added', 'paid', 'coupon', 'name', 'email', 
             'phone', 'address', 'government', 'city', 'pay_method', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'shipping_price', 
-            'final_price', 'shakeout_invoice_id', 'shakeout_invoice_url'
+            'final_price', 'shakeout_invoice_id', 'shakeout_invoice_url',
+            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
+            'payment_gateway', 'payment_url', 'payment_status'
         ]
         read_only_fields = [
             'id', 'pill_number', 'tracking_number', 'user_name', 'user_username', 
             'status', 'status_display', 'date_added', 'paid', 'coupon', 'name', 
             'email', 'phone', 'address', 'government', 'city', 'pay_method',
             'gift_discount', 'price_without_coupons_or_gifts', 'coupon_discount', 
-            'shipping_price', 'final_price', 'items_count','shakeout_invoice_id', 'shakeout_invoice_url'
+            'shipping_price', 'final_price', 'items_count','shakeout_invoice_id', 'shakeout_invoice_url',
+            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
+            'payment_gateway', 'payment_url', 'payment_status'
         ]
 
     def get_user_name(self, obj):
@@ -1146,11 +1167,25 @@ class PillSerializer(serializers.ModelSerializer):
 
     def get_pay_method(self, obj):
         return obj.pilladdress.pay_method if hasattr(obj, 'pilladdress') and obj.pilladdress else None
+    
     def get_shakeout_invoice_url(self, obj):
         if obj.shakeout_invoice_id and obj.shakeout_invoice_ref:
             return f"https://dash.shake-out.com/invoice/{obj.shakeout_invoice_id}/{obj.shakeout_invoice_ref}"
         return None
     
+    def get_easypay_invoice_url(self, obj):
+        if obj.easypay_invoice_uid and obj.easypay_invoice_sequence:
+            return f"https://dash.easy-adds.com/invoice/{obj.easypay_invoice_uid}/{obj.easypay_invoice_sequence}"
+        return None
+    
+    def get_payment_url(self, obj):
+        return obj.payment_url
+    
+    def get_payment_status(self, obj):
+        return obj.payment_status
+    
+
+
 class DiscountSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
