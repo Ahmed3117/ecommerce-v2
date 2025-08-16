@@ -40,7 +40,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'username', 'email', 'password', 'name','government', 'city',
             'is_staff', 'is_superuser', 'user_type', 'phone','phone2','parent_phone',
-            'year', 'address', 'user_profile_image',
+            'year', 'division', 'address', 'user_profile_image',
             'user_profile_image_id','created_at', 
             'cart_items_count', 'last_cart_added',
             'loved_count', 'pill_stats', 'financial_summary'
@@ -54,6 +54,7 @@ class UserSerializer(serializers.ModelSerializer):
             'phone2': {'required': False, 'allow_null': True, 'allow_blank': True},
             'parent_phone': {'required': False, 'allow_null': True, 'allow_blank': True},
             'year': {'required': False, 'allow_null': True},
+            'division': {'required': False, 'allow_null': True},
             'address': {'required': False, 'allow_null': True, 'allow_blank': True},
             'password': {'required': False},  # Make password optional for updates
         }
@@ -94,6 +95,7 @@ class UserSerializer(serializers.ModelSerializer):
             phone2=validated_data.get('phone2', None),
             parent_phone=validated_data.get('parent_phone', None),
             year=validated_data.get('year', None),
+            division=validated_data.get('division', None),
             address=validated_data.get('address', None),
             government=validated_data.get('government', None),
             city=validated_data.get('city', None),
@@ -184,7 +186,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'email', 'name', 'user_type', 'phone','phone2','parent_phone', 'year',
+            'id', 'username', 'email', 'name', 'user_type', 'phone','phone2','parent_phone', 'year', 'division',
             'address', 'user_profile_image', 'addresses', 'pills',
             'loved_products', 'total_spent', 'favorite_category'
         ]
@@ -229,7 +231,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'name', 'email', 'phone','phone2','parent_phone', 'user_type', 'year',
+            'id', 'username', 'name', 'email', 'phone','phone2','parent_phone', 'user_type', 'year', 'division',
             'government', 'city', 'address', 'created_at', 'user_profile_image',
             'addresses', 'pill_stats', 'loved_products', 'financial_summary',
             'cart_items', 'last_cart_added' 

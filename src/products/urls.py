@@ -1,7 +1,6 @@
 from django.urls import path
 
 from products import payment_views
-from products.webhooks import test_webhook, ping_endpoint  # Removed fawaterak_webhook import
 from products.khazenly_webhooks import khazenly_order_status_webhook
 from products.shakeout_webhooks import shakeout_webhook  # Add Shake-out webhook import
 from . import views
@@ -126,9 +125,7 @@ urlpatterns = [
     path('products/api/payment/failed/<str:pill_number>/', payment_views.payment_failed_view, name='fallback_payment_failed'),
     path('products/api/payment/pending/<str:pill_number>/', payment_views.payment_pending_view, name='fallback_payment_pending'),
     
-    # Test webhook endpoint for ngrok connectivity
-    path('api/test-webhook/', test_webhook, name='test_webhook'),
-    path('ping/', ping_endpoint, name='ping_endpoint'),
+
     
     # Khazenly Webhook
     path('api/webhook/khazenly/order-status/', khazenly_order_status_webhook, name='khazenly_order_status_webhook'),
