@@ -1,0 +1,433 @@
+{
+	"info": {
+		"_postman_id": "99cb7237-290c-41d0-b7de-6c4a3b449986",
+		"name": "Payment Gateway Testing (Shakeout + EasyPay)",
+		"description": "Complete testing collection for both Shakeout and EasyPay payment gateways",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "33824171"
+	},
+	"item": [
+		{
+			"name": "🔹 Shakeout Payment Gateway",
+			"item": [
+				{
+					"name": "Create Shakeout Invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "auth",
+								"value": "Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/pills/{{pill_id}}/create-shakeout-invoice/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"pills",
+								"{{pill_id}}",
+								"create-shakeout-invoice",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Shakeout Webhook Simulation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"type\": \"InvoiceStatusUpdated\",\n    \"data\": {\n        \"invoice_id\": \"{{shakeout_invoice_id}}\",\n        \"invoice_ref\": \"{{shakeout_invoice_ref}}\",\n        \"payment_method\": \"fawry\",\n        \"invoice_status\": \"paid\",\n        \"amount\": 100.5,\n        \"referenceNumber\": \"7712176561\",\n        \"updated_at\": \"2023-02-25T07:45:24.000000Z\"\n    },\n    \"signature\": \"59e7d94696bd87768ba1bad6fa4704901e3eef2c035262ea1f3038159391778e\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/webhook/shakeout/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"webhook",
+								"shakeout",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "🔸 EasyPay Payment Gateway",
+			"item": [
+				{
+					"name": "Create EasyPay Invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "auth",
+								"value": "Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/pills/{{pill_id}}/create-easypay-invoice/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"pills",
+								"{{pill_id}}",
+								"create-easypay-invoice",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "EasyPay Webhook Simulation",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"// Calculate EasyPay webhook signature",
+									"const amount = pm.collectionVariables.get('webhook_amount') || '180.00';",
+									"const customer_phone = pm.collectionVariables.get('customer_phone') || '01030265229';",
+									"const secret_key = pm.collectionVariables.get('easypay_secret_key') || 'aa093225-cb06-4b39-b684-1f8533c5e2f6';",
+									"",
+									"// EasyPay webhook signature pattern: amount + customer_phone + secret_key",
+									"const stringToHash = `${amount}${customer_phone}${secret_key}`;",
+									"const signature = CryptoJS.SHA256(stringToHash).toString(CryptoJS.enc.Hex);",
+									"",
+									"pm.collectionVariables.set('webhook_signature', signature);",
+									"",
+									"console.log('EasyPay Webhook Signature Calculation:');",
+									"console.log('Amount:', amount);",
+									"console.log('Customer Phone:', customer_phone);",
+									"console.log('Secret Key:', secret_key);",
+									"console.log('String to Hash:', stringToHash);",
+									"console.log('Generated Signature:', signature);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"easy_pay_sequence\": \"{{easypay_invoice_sequence}}\",\n    \"status\": \"PAID\",\n    \"signature\": \"{{webhook_signature}}\",\n    \"customer_phone\": \"{{customer_phone}}\",\n    \"amount\": \"{{webhook_amount}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/webhook/easypay/{{api_key}}/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"webhook",
+								"easypay",
+								"{{api_key}}",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "EasyPay Webhook (No API Key)",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"// Calculate EasyPay webhook signature",
+									"const amount = pm.collectionVariables.get('webhook_amount') || '180.00';",
+									"const customer_phone = pm.collectionVariables.get('customer_phone') || '01030265229';",
+									"const secret_key = pm.collectionVariables.get('easypay_secret_key') || 'aa093225-cb06-4b39-b684-1f8533c5e2f6';",
+									"",
+									"const stringToHash = `${amount}${customer_phone}${secret_key}`;",
+									"const signature = CryptoJS.SHA256(stringToHash).toString(CryptoJS.enc.Hex);",
+									"",
+									"pm.collectionVariables.set('webhook_signature', signature);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"easy_pay_sequence\": \"{{easypay_invoice_sequence}}\",\n    \"status\": \"PAID\",\n    \"signature\": \"{{webhook_signature}}\",\n    \"customer_phone\": \"{{customer_phone}}\",\n    \"amount\": \"{{webhook_amount}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/webhook/easypay/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"webhook",
+								"easypay",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "🔄 Generic Payment Gateway",
+			"item": [
+				{
+					"name": "Create Payment Invoice (Active Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "auth",
+								"value": "Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/pills/{{pill_id}}/create-payment-invoice/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"pills",
+								"{{pill_id}}",
+								"create-payment-invoice",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "🔧 Utilities & Health Checks",
+			"item": [
+				{
+					"name": "Shakeout Webhook Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/webhook/shakeout/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"webhook",
+								"shakeout",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "EasyPay Webhook Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/webhook/easypay/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"webhook",
+								"easypay",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Resend Khazenly Orders",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "auth",
+								"value": "Bearer {{jwt_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"batch_size\": 10,\n    \"delay\": 20,\n    \"force\": false,\n    \"dry_run\": false\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/products/api/resend-khazenly-orders/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"products",
+								"api",
+								"resend-khazenly-orders",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:9999",
+			"type": "string"
+		},
+		{
+			"key": "jwt_token",
+			"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzU0NjAzMDQ4LCJpYXQiOjE3NTQzNDM4NDgsImp0aSI6IjhhYTJkNjBjZGEwMTQ5ZThhZWUwNGY5OGZmNzkzNTJlIiwidXNlcl9pZCI6MX0.Na6rwmqH_z8hkrHER7xId7gxp-T-DiRG8vlAsgCjdCg",
+			"type": "string"
+		},
+		{
+			"key": "pill_id",
+			"value": "36",
+			"type": "string"
+		},
+		{
+			"key": "shakeout_invoice_id",
+			"value": "ok5ma5mBYK",
+			"type": "string"
+		},
+		{
+			"key": "shakeout_invoice_ref",
+			"value": "9s5234mBYK",
+			"type": "string"
+		},
+		{
+			"key": "easypay_invoice_sequence",
+			"value": "77657497986560326295",
+			"type": "string"
+		},
+		{
+			"key": "customer_phone",
+			"value": "01030265229",
+			"type": "string"
+		},
+		{
+			"key": "webhook_amount",
+			"value": "180.00",
+			"type": "string"
+		},
+		{
+			"key": "easypay_secret_key",
+			"value": "aa093225-cb06-4b39-b684-1f8533c5e2f6",
+			"type": "string"
+		},
+		{
+			"key": "api_key",
+			"value": "aa093225-cb06-4b39-b684-1f8533c5e2f6",
+			"type": "string"
+		},
+		{
+			"key": "webhook_signature",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
