@@ -16,6 +16,7 @@ import logging
 from products.models import Pill
 from services.fawaterak_service import fawaterak_service
 from services.shakeout_service import shakeout_service  # Add Shake-out service import
+from services.easypay_service import easypay_service  # Add EasyPay service import
 
 logger = logging.getLogger(__name__)
 
@@ -434,6 +435,229 @@ class CreateShakeoutInvoiceView(APIView):
 # Instantiate the views
 create_payment_view = CreatePaymentView.as_view()
 create_shakeout_invoice_view = CreateShakeoutInvoiceView.as_view()  # Add Shake-out view
+
+
+class CreateEasyPayInvoiceView(APIView):
+    authentication_classes = [CustomJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, pill_id):
+        """Create an EasyPay invoice for a pill"""
+        try:
+            logger.info(f"Starting EasyPay invoice creation for pill {pill_id}, user: {request.user}")
+            
+            pill = get_object_or_404(Pill, id=pill_id, user=request.user)
+            logger.info(f"Pill found: {pill.pill_number}")
+            
+            # Check if pill already has an EasyPay invoice
+            if pill.easypay_invoice_uid:
+                # Check if the existing invoice is expired or invalid
+                if pill.is_easypay_invoice_expired():
+                    logger.info(f"Existing EasyPay invoice {pill.easypay_invoice_uid} for pill {pill_id} is expired/invalid - creating new one")
+                    
+                    # Clear old invoice data to create a new one
+                    pill.easypay_invoice_uid = None
+                    pill.easypay_invoice_sequence = None
+                    pill.easypay_data = None
+                    pill.easypay_created_at = None
+                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at'])
+                else:
+                    logger.warning(f"Pill {pill_id} already has active EasyPay invoice: {pill.easypay_invoice_uid}")
+                    return Response({
+                        'success': False,
+                        'error': 'Pill already has an EasyPay invoice',
+                        'data': {
+                            'invoice_uid': pill.easypay_invoice_uid,
+                            'invoice_sequence': pill.easypay_invoice_sequence,
+                            'payment_url': pill.easypay_payment_url,
+                            'created_at': pill.easypay_created_at.isoformat() if pill.easypay_created_at else None,
+                            'status': 'active'
+                        }
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if pill has required data
+            if not hasattr(pill, 'pilladdress'):
+                logger.error(f"Pill {pill_id} missing pilladdress")
+                return Response({
+                    'success': False,
+                    'error': 'Please complete your address information first',
+                    'pill_number': pill.pill_number,
+                    'status': 'missing_address'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"Pill address found: {pill.pilladdress.name}, phone: {pill.pilladdress.phone}")
+            
+            # Create EasyPay invoice using the service directly to get detailed error info
+            logger.info(f"Calling easypay_service.create_payment_invoice() for pill {pill_id}")
+            result = easypay_service.create_payment_invoice(pill)
+            logger.info(f"easypay_service.create_payment_invoice returned: {result}")
+            
+            if result['success']:
+                # Update pill with invoice data from successful response
+                pill.easypay_invoice_uid = result['data']['invoice_uid']
+                pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                pill.easypay_data = result['data']
+                pill.easypay_created_at = timezone.now()
+                pill.payment_gateway = 'easypay'
+                pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+                
+                logger.info(f"Successfully created EasyPay invoice for pill {pill_id}")
+                return Response({
+                    'success': True,
+                    'message': 'EasyPay invoice created successfully',
+                    'data': {
+                        'invoice_uid': result['data']['invoice_uid'],
+                        'invoice_sequence': result['data']['invoice_sequence'],
+                        'payment_url': result['data']['payment_url'],
+                        'amount': result['data']['amount'],
+                        'pill_number': pill.pill_number,
+                        'payment_method': result['data'].get('payment_method', 'fawry')
+                    }
+                }, status=status.HTTP_201_CREATED)
+            else:
+                # Return the actual error from EasyPay service
+                logger.error(f"EasyPay service error for pill {pill_id}: {result['error']}")
+                
+                response_data = {
+                    'success': False,
+                    'error': result['error'],
+                    'pill_number': pill.pill_number
+                }
+                
+                # Include additional data if available (like existing invoice info)
+                if result.get('data'):
+                    response_data['data'] = result['data']
+                
+                return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+                
+        except Exception as e:
+            logger.error(f"Exception creating EasyPay invoice for pill {pill_id}: {str(e)}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'success': False,
+                'error': f'Server error: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CreatePaymentInvoiceView(APIView):
+    authentication_classes = [CustomJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, pill_id):
+        """Create a payment invoice using the active payment gateway"""
+        try:
+            from django.conf import settings
+            
+            logger.info(f"Starting payment invoice creation for pill {pill_id}, user: {request.user}")
+            
+            pill = get_object_or_404(Pill, id=pill_id, user=request.user)
+            logger.info(f"Pill found: {pill.pill_number}")
+            
+            # Get active payment method from settings
+            active_method = getattr(settings, 'ACTIVE_PAYMENT_METHOD', 'shakeout').lower()
+            logger.info(f"Active payment method: {active_method}")
+            
+            if active_method == 'easypay':
+                # Use EasyPay
+                if pill.easypay_invoice_uid and not pill.is_easypay_invoice_expired():
+                    logger.warning(f"Pill {pill_id} already has active EasyPay invoice")
+                    return Response({
+                        'success': False,
+                        'error': 'Pill already has an active EasyPay invoice',
+                        'data': {
+                            'invoice_uid': pill.easypay_invoice_uid,
+                            'invoice_sequence': pill.easypay_invoice_sequence,
+                            'payment_url': pill.easypay_payment_url,
+                            'payment_gateway': 'easypay'
+                        }
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                result = easypay_service.create_payment_invoice(pill)
+                
+                if result['success']:
+                    pill.easypay_invoice_uid = result['data']['invoice_uid']
+                    pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                    pill.easypay_data = result['data']
+                    pill.easypay_created_at = timezone.now()
+                    pill.payment_gateway = 'easypay'
+                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+                    
+                    return Response({
+                        'success': True,
+                        'message': 'EasyPay invoice created successfully',
+                        'data': {
+                            'invoice_uid': result['data']['invoice_uid'],
+                            'invoice_sequence': result['data']['invoice_sequence'],
+                            'payment_url': result['data']['payment_url'],
+                            'amount': result['data']['amount'],
+                            'payment_gateway': 'easypay'
+                        }
+                    }, status=status.HTTP_201_CREATED)
+                else:
+                    return Response({
+                        'success': False,
+                        'error': result['error'],
+                        'payment_gateway': 'easypay'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            else:  # Default to shakeout
+                # Use Shakeout
+                if pill.shakeout_invoice_id and not pill.is_shakeout_invoice_expired():
+                    logger.warning(f"Pill {pill_id} already has active Shakeout invoice")
+                    return Response({
+                        'success': False,
+                        'error': 'Pill already has an active Shakeout invoice',
+                        'data': {
+                            'invoice_id': pill.shakeout_invoice_id,
+                            'invoice_ref': pill.shakeout_invoice_ref,
+                            'payment_url': pill.shakeout_payment_url,
+                            'payment_gateway': 'shakeout'
+                        }
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                result = shakeout_service.create_payment_invoice(pill)
+                
+                if result['success']:
+                    pill.shakeout_invoice_id = result['data']['invoice_id']
+                    pill.shakeout_invoice_ref = result['data']['invoice_ref']
+                    pill.shakeout_data = result['data']
+                    pill.shakeout_created_at = timezone.now()
+                    pill.payment_gateway = 'shakeout'
+                    pill.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at', 'payment_gateway'])
+                    
+                    return Response({
+                        'success': True,
+                        'message': 'Shakeout invoice created successfully',
+                        'data': {
+                            'invoice_id': result['data']['invoice_id'],
+                            'invoice_ref': result['data']['invoice_ref'],
+                            'payment_url': result['data']['url'],
+                            'total_amount': result['data']['total_amount'],
+                            'payment_gateway': 'shakeout'
+                        }
+                    }, status=status.HTTP_201_CREATED)
+                else:
+                    return Response({
+                        'success': False,
+                        'error': result['error'],
+                        'payment_gateway': 'shakeout'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+        except Exception as e:
+            logger.error(f"Exception creating payment invoice for pill {pill_id}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'success': False,
+                'error': f'Server error: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Instantiate the new views
+create_easypay_invoice_view = CreateEasyPayInvoiceView.as_view()
+create_payment_invoice_view = CreatePaymentInvoiceView.as_view()
 payment_success_view = PaymentSuccessView.as_view()
 payment_failed_view = PaymentFailedView.as_view()
 payment_pending_view = PaymentPendingView.as_view()
