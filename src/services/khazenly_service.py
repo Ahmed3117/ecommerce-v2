@@ -161,23 +161,41 @@ class KhazenlyService:
             total_amount = total_product_price + shipping_fees - total_discount
             
             # FIXED: Customer data format based on Khazenly requirements
-            # Clean phone number more thoroughly
-            # clean_phone = ""
-            # if address.phone:
-            #     clean_phone = ''.join(filter(str.isdigit, address.phone))
-            #     # Ensure phone starts with country code for Egypt if it doesn't
-            #     if clean_phone and not clean_phone.startswith('20'):
-            #         if clean_phone.startswith('0'):
-            #             clean_phone = '20' + clean_phone[1:]  # Replace leading 0 with +20
-            #         else:
-            #             clean_phone = '20' + clean_phone  # Add +20 prefix
+            # Collect all available phone numbers without duplicates
+            phone_numbers = []
+            
+            # Collect phone numbers from different sources
+            if address.phone:
+                phone_numbers.append(address.phone)
+            if hasattr(pill.user, 'phone') and pill.user.phone:
+                phone_numbers.append(pill.user.phone)
+            if hasattr(pill.user, 'phone2') and pill.user.phone2:
+                phone_numbers.append(pill.user.phone2)
+            
+            # Remove duplicates while preserving order
+            unique_phones = []
+            for phone in phone_numbers:
+                if phone not in unique_phones:
+                    unique_phones.append(phone)
+            
+            # Set primary tel as address.phone (if available), otherwise use first unique phone
+            primary_tel = address.phone if address.phone else (unique_phones[0] if unique_phones else "")
+            
+            # For secondaryTel, get other unique phones excluding the primary tel
+            secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
+            secondary_tel = " | ".join(secondary_phones) if secondary_phones else ""
             
             # Get proper city name from government choices
             city_name = "Cairo"  # Default fallback
             if hasattr(address, 'government') and address.government:
                 from products.models import GOVERNMENT_CHOICES
                 gov_dict = dict(GOVERNMENT_CHOICES)
-                city_name = gov_dict.get(address.government, "Cairo")
+                government_name = gov_dict.get(address.government, "Cairo")
+                city_part = address.city if address.city else ""
+                if city_part:
+                    city_name = f"{government_name} - {city_part}"
+                else:
+                    city_name = government_name
             elif address.city:
                 city_name = address.city
             
@@ -205,9 +223,8 @@ class KhazenlyService:
                 },
                 "Customer": {
                     "customerName": (address.name or f"Customer {pill.user.username}")[:50],  # Limit name length
-                    # "tel": clean_phone,  
-                    "tel": address.phone,  
-                    "secondaryTel": "",
+                    "tel": primary_tel,  # Primary phone (address.phone or first available)
+                    "secondaryTel": secondary_tel,  # Other unique phones separated by " | "
                     "address1": (address.address or "Address not provided")[:100],  # Limit address length
                     "address2": "",
                     "address3": "",
