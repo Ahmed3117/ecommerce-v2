@@ -45,18 +45,25 @@ def get_user_frontend_pages(user):
     """Helper function to get user frontend pages"""
     try:
         # Import here to avoid app loading issues
-        from permissions.models import AllowedFrontEndPage
-        allowed_pages = AllowedFrontEndPage.objects.filter(user=user).select_related('frontendpage')
+        from permissions.models import FrontEndPagePermission
         
-        allowed_frontend_pages = []
-        for allowed_page in allowed_pages:
-            allowed_frontend_pages.append({
-                'id': allowed_page.frontendpage.id,
-                'title': allowed_page.frontendpage.title,
-                'url': allowed_page.frontendpage.url
-            })
-        
-        return allowed_frontend_pages
+        try:
+            # Get user's frontend page permission
+            permission = FrontEndPagePermission.objects.get(user=user)
+            pages = permission.pages.all()
+            
+            # Format the pages for the response
+            allowed_frontend_pages = []
+            for page in pages:
+                allowed_frontend_pages.append({
+                    'id': page.id,
+                    'title': page.title,
+                    'url': page.url
+                })
+            
+            return allowed_frontend_pages
+        except FrontEndPagePermission.DoesNotExist:
+            return []  # Return empty list if no permissions found
     except Exception:
         # Import error or other issues
         return []  # Return empty if permissions app not available

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import FrontEndPage, AllowedFrontEndPage
+from .models import FrontEndPage, FrontEndPagePermission
 
 User = get_user_model()
 
@@ -12,18 +12,22 @@ class FrontEndPageSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
-class AllowedFrontEndPageSerializer(serializers.ModelSerializer):
-    frontendpage = FrontEndPageSerializer(read_only=True)
-    frontendpage_id = serializers.PrimaryKeyRelatedField(
+# Legacy serializer removed - using FrontEndPagePermissionSerializer instead
+
+
+class FrontEndPagePermissionSerializer(serializers.ModelSerializer):
+    pages = FrontEndPageSerializer(many=True, read_only=True)
+    page_ids = serializers.PrimaryKeyRelatedField(
         queryset=FrontEndPage.objects.all(),
-        source='frontendpage',
-        write_only=True
+        source='pages',
+        write_only=True,
+        many=True
     )
     
     class Meta:
-        model = AllowedFrontEndPage
-        fields = ['id', 'user', 'frontendpage', 'frontendpage_id', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        model = FrontEndPagePermission
+        fields = ['id', 'user', 'pages', 'page_ids', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class AssignFrontEndPagesSerializer(serializers.Serializer):

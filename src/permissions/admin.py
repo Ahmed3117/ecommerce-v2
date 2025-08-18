@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AllowedEndpoint, AllowedEndpointGroup, UserPermission, FrontEndPage, AllowedFrontEndPage
+from .models import AllowedEndpoint, AllowedEndpointGroup, UserPermission, FrontEndPage, FrontEndPagePermission
 
 
 @admin.register(AllowedEndpoint)
@@ -29,16 +29,7 @@ class FrontEndPageAdmin(admin.ModelAdmin):
     ordering = ('title',)
 
 
-@admin.register(AllowedFrontEndPage)
-class AllowedFrontEndPageAdmin(admin.ModelAdmin):
-    list_display = ('user', 'frontendpage', 'created_at')
-    list_filter = ('frontendpage', 'created_at')
-    search_fields = ('user__email', 'user__name', 'frontendpage__title', 'frontendpage__url')
-    raw_id_fields = ('user',)
-    autocomplete_fields = ('frontendpage',)
-    
-    def get_queryset(self, request):
-        return super().get_queryset(request).select_related('user', 'frontendpage')
+# AllowedFrontEndPageAdmin removed - using FrontEndPagePermissionAdmin instead
 
 
 @admin.register(UserPermission)
@@ -58,7 +49,10 @@ class UserPermissionAdmin(admin.ModelAdmin):
     effective_endpoints_count.short_description = 'Effective Endpoints'
     
     def frontend_pages_count(self, obj):
-        return obj.user.allowed_frontend_pages.count()
+        try:
+            return obj.user.frontend_page_permission.pages.count()
+        except:
+            return 0
     frontend_pages_count.short_description = 'Frontend Pages'
     
     fieldsets = (
@@ -72,5 +66,28 @@ class UserPermissionAdmin(admin.ModelAdmin):
         ('Direct Endpoint Permissions', {
             'fields': ('allowed_endpoints',),
             'description': 'These permissions are used only if no group is assigned.'
+        }),
+    )
+
+
+@admin.register(FrontEndPagePermission)
+class FrontEndPagePermissionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'page_count', 'created_at', 'updated_at')
+    list_filter = ('created_at', 'updated_at')
+    search_fields = ('user__email', 'user__name', 'pages__title', 'pages__url')
+    filter_horizontal = ('pages',)  # This gives you the filter_horizontal widget!
+    raw_id_fields = ('user',)
+    
+    def page_count(self, obj):
+        return obj.pages.count()
+    page_count.short_description = "Number of Pages"
+    
+    fieldsets = (
+        (None, {
+            'fields': ('user',)
+        }),
+        ('Page Permissions', {
+            'fields': ('pages',),
+            'description': 'Select all frontend pages this user should have access to.'
         }),
     )
