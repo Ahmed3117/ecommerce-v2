@@ -4,10 +4,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from .models import FrontEndPage, AllowedFrontEndPage
+from .models import FrontEndPage, FrontEndPagePermission
 from .serializers import (
     FrontEndPageSerializer, 
-    AllowedFrontEndPageSerializer, 
+    FrontEndPagePermissionSerializer,
     AssignFrontEndPagesSerializer
 )
 
@@ -62,28 +62,19 @@ def assign_frontend_pages(request):
         user = User.objects.get(id=user_id)
         
         with transaction.atomic():
-            # Remove all existing frontend page permissions for this user
-            AllowedFrontEndPage.objects.filter(user=user).delete()
+            # Get or create the FrontEndPagePermission for this user
+            permission, created = FrontEndPagePermission.objects.get_or_create(user=user)
             
-            # Create new frontend page permissions
+            # Clear existing pages
+            permission.pages.clear()
+            
+            # Add new pages
             frontend_pages = FrontEndPage.objects.filter(id__in=frontend_page_ids)
-            allowed_pages = []
-            
-            for page in frontend_pages:
-                allowed_pages.append(
-                    AllowedFrontEndPage(user=user, frontendpage=page)
-                )
-            
-            # Bulk create the new permissions
-            if allowed_pages:
-                AllowedFrontEndPage.objects.bulk_create(allowed_pages)
+            permission.pages.add(*frontend_pages)
         
-        # Get the updated permissions to return
-        updated_permissions = AllowedFrontEndPage.objects.filter(
-            user=user
-        ).select_related('frontendpage')
-        
-        serializer = AllowedFrontEndPageSerializer(updated_permissions, many=True)
+        # Get the updated permission to return
+        permission = FrontEndPagePermission.objects.get(user=user)
+        serializer = FrontEndPagePermissionSerializer(permission)
         
         return Response({
             'success': True,
@@ -117,18 +108,22 @@ def get_user_frontend_pages(request, user_id):
     
     try:
         user = User.objects.get(id=user_id)
-        allowed_pages = AllowedFrontEndPage.objects.filter(
-            user=user
-        ).select_related('frontendpage')
         
-        # Return just the frontend page data
-        pages_data = []
-        for allowed_page in allowed_pages:
-            pages_data.append({
-                'id': allowed_page.frontendpage.id,
-                'title': allowed_page.frontendpage.title,
-                'url': allowed_page.frontendpage.url
-            })
+        try:
+            permission = FrontEndPagePermission.objects.get(user=user)
+            pages = permission.pages.all()
+            
+            # Return just the frontend page data
+            pages_data = []
+            for page in pages:
+                pages_data.append({
+                    'id': page.id,
+                    'title': page.title,
+                    'url': page.url
+                })
+        except FrontEndPagePermission.DoesNotExist:
+            # No permissions found
+            pages_data = []
         
         return Response({
             'success': True,

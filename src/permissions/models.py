@@ -62,27 +62,7 @@ class FrontEndPage(models.Model):
         return f"{self.title} ({self.url})"
 
 
-class AllowedFrontEndPage(models.Model):
-    """Model to assign frontend page permissions to users"""
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='allowed_frontend_pages'
-    )
-    frontendpage = models.ForeignKey(
-        FrontEndPage,
-        on_delete=models.CASCADE,
-        related_name='allowed_users'
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        unique_together = ('user', 'frontendpage')
-        verbose_name = "Allowed Frontend Page"
-        verbose_name_plural = "Allowed Frontend Pages"
-    
-    def __str__(self):
-        return f"{self.user.email} - {self.frontendpage.title}"
+# AllowedFrontEndPage model removed - using FrontEndPagePermission instead
 
 
 class UserPermission(models.Model):
@@ -120,3 +100,30 @@ class UserPermission(models.Model):
         else:
             # Otherwise, use direct permissions
             return self.allowed_endpoints.all()
+
+
+class FrontEndPagePermission(models.Model):
+    """
+    Model to manage frontend page permissions more comprehensively
+    with many-to-many relationships that support filter_horizontal in admin
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='frontend_page_permission'
+    )
+    pages = models.ManyToManyField(
+        FrontEndPage,
+        blank=True,
+        related_name='user_permissions',
+        help_text="Frontend pages this user can access"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Frontend Page Permission"
+        verbose_name_plural = "Frontend Page Permissions"
+        
+    def __str__(self):
+        return f"Frontend page permissions for {self.user.email}"
