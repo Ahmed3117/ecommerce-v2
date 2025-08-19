@@ -1175,7 +1175,7 @@ class PillSerializer(serializers.ModelSerializer):
     
     def get_easypay_invoice_url(self, obj):
         if obj.easypay_invoice_uid and obj.easypay_invoice_sequence:
-            return f"https://dash.easy-adds.com/invoice/{obj.easypay_invoice_uid}/{obj.easypay_invoice_sequence}"
+            return f"https://stu.easy-adds.com/invoice/{obj.easypay_invoice_uid}/{obj.easypay_invoice_sequence}"
         return None
     
     def get_payment_url(self, obj):

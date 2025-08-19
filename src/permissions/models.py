@@ -124,6 +124,6 @@ class FrontEndPagePermission(models.Model):
     class Meta:
         verbose_name = "Frontend Page Permission"
         verbose_name_plural = "Frontend Page Permissions"
-        
+
     def __str__(self):
         return f"Frontend page permissions for {self.user.email}"
