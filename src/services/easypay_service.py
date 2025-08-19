@@ -16,8 +16,8 @@ class EasyPayService:
         self.secret_key = getattr(settings, 'EASYPAY_SECRET_KEY', '')
         self.base_url = getattr(settings, 'EASYPAY_BASE_URL', 'https://api.easy-adds.com/api')
         self.payment_method = getattr(settings, 'EASYPAY_PAYMENT_METHOD', 'fawry')
-        self.payment_expiry = getattr(settings, 'EASYPAY_PAYMENT_EXPIRY', 172800000)  # 48 hours
-        
+        self.payment_expiry = getattr(settings, 'EASYPAY_PAYMENT_EXPIRY', 172800000) 
+
         # URLs
         self.create_invoice_url = f"{self.base_url}/create-invoice/"
         self.get_invoice_url = f"{self.base_url}/get-invoice"
@@ -96,10 +96,14 @@ class EasyPayService:
                 })
             
             # Prepare request payload
+            # Calculate expiry timestamp (current time + payment expiry in milliseconds)
+            current_time_ms = int(timezone.now().timestamp() * 1000)
+            expiry_time_ms = current_time_ms + self.payment_expiry
+            
             payload = {
                 "vendor_code": self.vendor_code,
                 "amount": amount,
-                "payment_expiry": self.payment_expiry,
+                "payment_expiry": expiry_time_ms,
                 "payment_method": self.payment_method,
                 "signature": signature,
                 "customer": {
@@ -139,7 +143,7 @@ class EasyPayService:
                         invoice_data = invoice_details['data']
                         
                         # Construct payment URL (assuming it follows a pattern)
-                        payment_url = f"https://dash.easy-adds.com/invoice/{invoice_uid}/{invoice_sequence}"
+                        payment_url = f"https://stu.easy-adds.com/invoice/{invoice_uid}/{invoice_sequence}"
                         
                         result_data = {
                             'invoice_sequence': invoice_sequence,
