@@ -14,14 +14,8 @@ class KhazenlyService:
         self.base_url = settings.KHAZENLY_BASE_URL
         self.client_id = settings.KHAZENLY_CLIENT_ID
         self.client_secret = settings.KHAZENLY_CLIENT_SECRET
-        
-        # FIXED: Use the correct store name as provided by Khazenly
-        self.store_name = "https://bookefay.com"  # Updated from BOOKIFAY
-        
-        # FIXED: Use the correct user email for order creation
-        self.order_user_email = "mohamedaymab26@gmail.com"  # Not the API user
-        
-        # Updated tokens from successful authentication
+        self.store_name = settings.KHAZENLY_STORE_NAME
+        self.order_user_email = settings.KHAZENLY_ORDER_USER_EMAIL
         self.refresh_token = settings.KHAZENLY_REFRESH_TOKEN
         
         # Cache keys

@@ -133,10 +133,10 @@ def handle_easypay_webhook_post(request, api_key):
             old_status = pill.status
             
             pill.paid = True
-            if pill.status == 'i':  # If still initiated, move to paid
+            if pill.status in ['i', 'w']:  # If still initiated or waiting, move to paid
                 pill.status = 'p'
             
-            # Update EasyPay data with webhook information
+            # Update EasyPay data with webhook information 
             if pill.easypay_data:
                 pill.easypay_data['webhook_received'] = True
                 pill.easypay_data['webhook_timestamp'] = timezone.now().isoformat()
