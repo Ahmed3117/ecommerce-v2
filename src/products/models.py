@@ -160,7 +160,7 @@ class Teacher(models.Model):
         return self.name
 
 class Product(models.Model):
-    product_number = models.CharField(max_length=20, editable=False, null=True, blank=True)
+    product_number = models.CharField(max_length=20, null=True, blank=True)
     product_type = [
             ('book', 'Book'),
             ('product', 'Product'),
@@ -295,7 +295,7 @@ class Product(models.Model):
         
         # Generate product_number after saving to ensure we have an ID
         if is_new and not self.product_number:
-            self.product_number = f"Bookefy-{self.id}"
+            self.product_number = f"{settings.ACTIVE_SITE_NAME}-{self.id}"
             # Update only the product_number field to avoid infinite recursion
             Product.objects.filter(pk=self.pk).update(product_number=self.product_number)
 
