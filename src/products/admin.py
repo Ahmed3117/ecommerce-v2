@@ -190,7 +190,7 @@ class FinalPriceListFilter(admin.SimpleListFilter):
 @admin.register(Pill)
 class PillAdmin(admin.ModelAdmin):
     list_display = [
-        'pill_number', 'user', 'paid', 'status', 'is_shipped',
+        'pill_number', 'easypay_invoice_sequence', 'easypay_invoice_uid', 'user', 'paid', 'status', 'is_shipped',
         'khazenly_status', 'khazenly_actions', 'final_price_display'
     ]
     list_filter = ['status', 'paid', 'is_shipped', FinalPriceListFilter]
