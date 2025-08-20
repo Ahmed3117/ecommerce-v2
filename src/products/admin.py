@@ -166,15 +166,44 @@ class PillStatusLogInline(admin.TabularInline):
 #     autocomplete_fields = ('product', 'color')
 #     readonly_fields = ('price_at_sale', 'native_price_at_sale', 'date_sold')
     
+class FinalPriceListFilter(admin.SimpleListFilter):
+    title = 'Max Final Price'
+    parameter_name = 'max_final_price'
+
+    def lookups(self, request, model_admin):
+        # Provide choices for max price: 100, 200, ..., 1000
+        return [(str(price), f'≤ {price}') for price in range(100, 1100, 100)]
+
+    def queryset(self, request, queryset):
+        value = self.value()
+        if value:
+            try:
+                max_price = float(value)
+                # Filter pills with final_price <= max_price
+                return queryset.filter(id__in=[
+                    pill.id for pill in queryset if pill.final_price() is not None and pill.final_price() <= max_price
+                ])
+            except Exception:
+                return queryset
+        return queryset
+
 @admin.register(Pill)
 class PillAdmin(admin.ModelAdmin):
-    list_display = ['pill_number', 'user','paid', 'status', 'is_shipped', 'khazenly_status', 'khazenly_actions']
-    list_filter = ['status', 'paid', 'is_shipped']  
+    list_display = [
+        'pill_number', 'user', 'paid', 'status', 'is_shipped',
+        'khazenly_status', 'khazenly_actions', 'final_price_display'
+    ]
+    list_filter = ['status', 'paid', 'is_shipped', FinalPriceListFilter]
     search_fields = ['pill_number', 'user__username']
     readonly_fields = ['pill_number']
     list_editable = ['paid', 'status']
     actions = ['send_to_khazenly_bulk']
-    
+
+    def final_price_display(self, obj):
+        return obj.final_price()
+    final_price_display.short_description = 'Final Price'
+    final_price_display.admin_order_field = None
+
     def khazenly_status(self, obj):
         if obj.has_khazenly_order:
             return format_html('<span style="color: green;">✓ Created</span>')
@@ -183,7 +212,7 @@ class PillAdmin(admin.ModelAdmin):
         else:
             return format_html('<span style="color: gray;">-</span>')
     khazenly_status.short_description = 'Khazenly'
-    
+
     @admin.display(description='Khazenly Actions')
     def khazenly_actions(self, obj):
         """Add manual Khazenly action button for each row"""
@@ -209,21 +238,20 @@ class PillAdmin(admin.ModelAdmin):
             return format_html(
                 '<span style="color: #6c757d; padding: 3px 8px; font-style: italic; background: #f8f9fa; border-radius: 3px;">💸 Not Paid</span>'
             )
-    
-    
+
     khazenly_actions.short_description = 'Khazenly Actions'
     khazenly_actions.admin_order_field = None
     khazenly_actions.allow_tags = True
-    
+
     @admin.action(description='Send selected pills to Khazenly (paid pills only)')
     def send_to_khazenly_bulk(self, request, queryset):
         """Bulk action to send multiple pills to Khazenly"""
         success_count = 0
         error_messages = []
-        
+
         # Filter only paid pills that don't have Khazenly orders
         eligible_pills = queryset.filter(paid=True)
-        
+
         for pill in eligible_pills:
             try:
                 pill._create_khazenly_order()
@@ -235,10 +263,10 @@ class PillAdmin(admin.ModelAdmin):
                     error_messages.append(f"Pill {pill.pill_number}: Order not created (no exception)")
             except Exception as e:
                 error_messages.append(f"Pill {pill.pill_number}: {str(e)}")
-                
+
         if success_count > 0:
             self.message_user(
-                request, 
+                request,
                 f'Successfully sent {success_count} pills to Khazenly.',
                 level='SUCCESS'
             )
@@ -264,33 +292,33 @@ class PillAdmin(admin.ModelAdmin):
             ),
         ]
         return custom_urls + urls
-    
+
     def send_to_khazenly_view(self, request, pill_id):
         """Handle manual send to Khazenly for individual pill"""
         from django.shortcuts import get_object_or_404, redirect
         from django.contrib import messages
-        
+
         pill = get_object_or_404(Pill, id=pill_id)
-        
+
         # Check if pill is eligible
         if not pill.paid:
             messages.error(request, f'❌ Pill {pill.pill_number} is not paid yet.')
             return redirect('admin:products_pill_changelist')
-            
+
         if pill.has_khazenly_order:
             messages.warning(request, f'⚠️ Pill {pill.pill_number} already has a Khazenly order: {pill.khazenly_sales_order_number}')
             return redirect('admin:products_pill_changelist')
-        
+
         try:
             # Manually trigger Khazenly order creation
             pill._create_khazenly_order()
-            
+
             # Refresh pill from database to get updated data
             pill.refresh_from_db()
-            
+
             if pill.has_khazenly_order:
                 messages.success(
-                    request, 
+                    request,
                     f'✅ Successfully sent Pill {pill.pill_number} to Khazenly! '
                     f'Sales Order Number: {pill.khazenly_sales_order_number}'
                 )
@@ -299,14 +327,14 @@ class PillAdmin(admin.ModelAdmin):
                     request,
                     f'❌ Failed to send Pill {pill.pill_number} to Khazenly. No exception was raised but order was not created.'
                 )
-                
+
         except Exception as e:
             # Show the actual error message instead of generic message
             messages.error(
                 request,
                 f'❌ Error sending Pill {pill.pill_number} to Khazenly: {str(e)}'
             )
-        
+
         return redirect('admin:products_pill_changelist')
     
 
