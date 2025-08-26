@@ -47,6 +47,15 @@ class EasyPayService:
         try:
             logger.info(f"Creating EasyPay invoice for pill {pill.pill_number}")
             
+            # Log pill details for debugging
+            pill_items_count = pill.items.count()
+            logger.info(f"Pill has {pill_items_count} items")
+            if pill_items_count > 0:
+                for i, item in enumerate(pill.items.all()[:5]):  # Log first 5 items
+                    logger.info(f"  Item {i+1}: {item.product.name} (ID: {item.id})")
+                if pill_items_count > 5:
+                    logger.info(f"  ... and {pill_items_count - 5} more items")
+            
             # Check if pill has address info
             if not hasattr(pill, 'pilladdress') or not pill.pilladdress:
                 logger.error(f"Pill {pill.pill_number} has no address information")
@@ -76,18 +85,30 @@ class EasyPayService:
             # Generate signature
             signature = self.calculate_signature(amount, profile_id, customer_phone)
             
-            # Prepare items list
+            # Prepare items list - EasyPay expects the total to match sum of all item prices
+            # So we'll create one consolidated item for the entire order to avoid calculation issues
             items = []
-            for item in pill.items.all():
-                items.append({
-                    "item_id": str(item.id),
-                    "price": amount,  # Use total amount for the single item
-                    "quantity": 1,  # Treat the entire order as one item
-                    "description": f"Order {pill.pill_number} - {item.product.name}"
-                })
             
-            # If no items, create a default item for the order
-            if not items:
+            # Get all pill items for description
+            pill_items = pill.items.all()
+            
+            if pill_items:
+                # Create a description that includes all products
+                product_names = [item.product.name for item in pill_items[:3]]  # Limit to first 3 for readability
+                if len(pill_items) > 3:
+                    description = f"Order {pill.pill_number}: {', '.join(product_names)} and {len(pill_items) - 3} more items"
+                else:
+                    description = f"Order {pill.pill_number}: {', '.join(product_names)}"
+                
+                # Create single consolidated item with total amount
+                items.append({
+                    "item_id": str(pill.id),
+                    "price": amount,
+                    "quantity": 1,
+                    "description": description
+                })
+            else:
+                # Fallback for orders with no items
                 items.append({
                     "item_id": str(pill.id),
                     "price": amount,
@@ -114,7 +135,13 @@ class EasyPayService:
                 "items": items
             }
             
-            logger.info(f"EasyPay request payload: {json.dumps(payload, indent=2)}")
+            # Log the final payload for debugging
+            logger.info(f"EasyPay request payload:")
+            logger.info(f"  - Amount: {amount}")
+            logger.info(f"  - Items count: {len(items)}")
+            logger.info(f"  - Items: {json.dumps(items, indent=4)}")
+            logger.info(f"  - Customer: {payload['customer']}")
+            logger.info(f"  - Full payload: {json.dumps(payload, indent=2)}")
             
             # Make API request
             response = requests.post(
