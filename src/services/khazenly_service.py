@@ -83,6 +83,70 @@ class KhazenlyService:
         except Exception as e:
             logger.error(f"Exception getting access token: {e}")
             return None
+        
+    def sanitize_for_khazenly(self, text, max_length=None):
+        """
+        Sanitize text for Khazenly API requirements
+        """
+        if not text:
+            return ""
+        
+        # Remove any problematic characters that might cause API issues
+        sanitized = str(text).strip()
+        
+        # Remove control characters and other potentially problematic chars
+        sanitized = ''.join(char for char in sanitized if ord(char) >= 32 or char in '\n\r\t')
+        
+        # Truncate if max_length is specified
+        if max_length and len(sanitized) > max_length:
+            sanitized = sanitized[:max_length].strip()
+            logger.info(f"Text truncated to {max_length} characters for Khazenly")
+        
+        return sanitized
+        
+    def validate_order_data(self, order_data):
+        """
+        Validate order data against Khazenly requirements
+        """
+        try:
+            issues = []
+            order = order_data.get('Order', {})
+            
+            # Check city field length (max 80 characters)
+            city = order.get('city', '')
+            if city and len(city) > 80:
+                issues.append(f"City field too long: {len(city)} chars (max 80)")
+            
+            # Check customer name length (Khazenly typically has limits)
+            customer_name = order.get('customerName', '')
+            if customer_name and len(customer_name) > 100:
+                issues.append(f"Customer name too long: {len(customer_name)} chars (max 100)")
+            
+            # Check phone number format
+            primary_tel = order.get('primaryTel', '')
+            if primary_tel and (len(primary_tel) < 10 or len(primary_tel) > 15):
+                issues.append(f"Primary phone number invalid length: {len(primary_tel)} chars")
+            
+            # Check line items - NOTE: lineItems is at root level, not inside Order
+            line_items = order_data.get('lineItems', [])  # Changed from order.get to order_data.get
+            if not line_items:
+                issues.append("No line items found")
+            else:
+                for i, item in enumerate(line_items):
+                    item_name = item.get('itemName', '')
+                    if item_name and len(item_name) > 200:
+                        issues.append(f"Line item {i+1} name too long: {len(item_name)} chars (max 200)")
+            
+            if issues:
+                logger.warning(f"⚠️ Order data validation issues found: {', '.join(issues)}")
+                return {'valid': False, 'issues': issues}
+            else:
+                logger.info("✅ Order data validation passed")
+                return {'valid': True, 'issues': []}
+                
+        except Exception as e:
+            logger.error(f"❌ Error validating order data: {str(e)}")
+            return {'valid': False, 'issues': [f'Validation error: {str(e)}']}
 
     def create_order(self, pill):
         """
@@ -110,7 +174,11 @@ class KhazenlyService:
             line_items = []
             total_product_price = 0
             
-            for item in pill.items.all():
+            # Debug: Check if pill has items
+            pill_items = pill.items.all()
+            logger.info(f"🔍 Processing pill {pill.pill_number}: Found {len(pill_items)} items")
+            
+            for item in pill_items:
                 product = item.product
                 original_price = float(product.price) if product.price else 0
                 discounted_price = float(product.discounted_price())
@@ -146,6 +214,10 @@ class KhazenlyService:
                     "discountAmount": item_discount,  # Actual discount on the product
                     "itemId": item.id  # Pill item ID
                 })
+            
+            logger.info(f"🔍 Created {len(line_items)} line items for pill {pill.pill_number}")
+            if not line_items:
+                logger.warning(f"⚠️ No line items created for pill {pill.pill_number}. Pill items count: {len(pill_items)}")
             
             # Calculate amounts with proper gift and coupon discounts
             shipping_fees = float(pill.shipping_price())
@@ -187,12 +259,32 @@ class KhazenlyService:
                 government_name = gov_dict.get(address.government, "Cairo")
                 city_part = address.city if address.city else ""
                 if city_part:
-                    city_name = f"{government_name} - {city_part}"
+                    # Combine government and city, but ensure it doesn't exceed Khazenly's 80-character limit
+                    full_city = f"{government_name} - {city_part}"
+                    if len(full_city) > 80:
+                        # If too long, truncate the city part but keep the government name
+                        max_city_length = 80 - len(government_name) - 3  # 3 for " - "
+                        if max_city_length > 0:
+                            truncated_city = city_part[:max_city_length].strip()
+                            city_name = f"{government_name} - {truncated_city}"
+                            logger.warning(f"City field truncated from '{full_city}' to '{city_name}' for Khazenly (max 80 chars)")
+                        else:
+                            # If government name itself is too long, just use it
+                            city_name = government_name[:80]
+                            logger.warning(f"Using only government name '{city_name}' due to length constraints")
+                    else:
+                        city_name = full_city
                 else:
                     city_name = government_name
             elif address.city:
-                city_name = address.city
+                # Ensure even standalone city doesn't exceed 80 characters
+                city_name = address.city[:80] if len(address.city) > 80 else address.city
+                if len(address.city) > 80:
+                    logger.warning(f"City field truncated from '{address.city}' to '{city_name}' for Khazenly")
             
+            logger.info(f"Final city name for Khazenly: '{city_name}' (length: {len(city_name)})")
+            
+            # Build order data
             order_data = {
                 "Order": {
                     "orderId": unique_order_id,
@@ -229,6 +321,12 @@ class KhazenlyService:
                 "lineItems": line_items
             }
             
+            # Debug logging for order structure
+            logger.info(f"🔍 Order data structure created:")
+            logger.info(f"  - Root keys: {list(order_data.keys())}")
+            logger.info(f"  - Order keys: {list(order_data.get('Order', {}).keys())}")
+            logger.info(f"  - Line items count: {len(order_data.get('lineItems', []))}")
+            
             # FIXED: Use correct API endpoint from Postman collection
             api_url = f"{self.base_url}/services/apexrest/api/CreateOrder"
             
@@ -241,13 +339,42 @@ class KhazenlyService:
             logger.info(f"Making order request to: {api_url}")
             logger.info(f"Order data: {json.dumps(order_data, indent=2)}")
             
-            response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
+            # Validate order data before sending
+            validation_result = self.validate_order_data(order_data)
+            if not validation_result['valid']:
+                error_msg = f"Order validation failed: {', '.join(validation_result['issues'])}"
+                logger.error(f"❌ {error_msg}")
+                logger.error(f"❌ Order data structure: Order keys={list(order_data.get('Order', {}).keys())}, Root keys={list(order_data.keys())}")
+                return {'success': False, 'error': error_msg}
+            
+            # Make the API request to Khazenly with better error handling
+            logger.info(f"🚀 Sending order to Khazenly API: {api_url}")
+            logger.info(f"📦 Order data preview: OrderID={order_data['Order']['orderId']}, Customer={order_data['Order'].get('customerName', 'N/A')}")
+            
+            try:
+                response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
+                logger.info(f"📡 Khazenly API response status: {response.status_code}")
+                logger.info(f"📡 Khazenly API response: {response.text}")
+            except requests.exceptions.Timeout:
+                logger.error("⏰ Khazenly API request timed out after 60 seconds")
+                return {'success': False, 'error': 'Khazenly API request timed out. Please try again later.'}
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"🔌 Connection error to Khazenly API: {str(e)}")
+                return {'success': False, 'error': 'Could not connect to Khazenly API. Please check network connection.'}
+            except requests.exceptions.RequestException as e:
+                logger.error(f"🌐 Request error to Khazenly API: {str(e)}")
+                return {'success': False, 'error': f'Network error: {str(e)}'}
             
             logger.info(f"Khazenly order response status: {response.status_code}")
             logger.info(f"Khazenly order response: {response.text}")
             
             if response.status_code == 200:
-                response_data = response.json()
+                try:
+                    response_data = response.json()
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Invalid JSON response from Khazenly: {str(e)}")
+                    logger.error(f"Raw response: {response.text}")
+                    return {'success': False, 'error': 'Invalid JSON response from Khazenly API'}
                 
                 # Check for success
                 if response_data.get('resultCode') == 0:
@@ -267,12 +394,37 @@ class KhazenlyService:
                         }
                     }
                 else:
-                    error_msg = response_data.get('message', 'Unknown error from Khazenly')
-                    logger.error(f"Khazenly order creation failed: {error_msg}")
-                    return {'success': False, 'error': error_msg}
+                    # Extract detailed error information
+                    result_code = response_data.get('resultCode', 'Unknown')
+                    error_msg = response_data.get('result', response_data.get('message', 'Unknown error from Khazenly'))
+                    
+                    logger.error(f"❌ Khazenly order creation failed - ResultCode: {result_code}")
+                    logger.error(f"❌ Error details: {error_msg}")
+                    logger.error(f"❌ Full response: {response_data}")
+                    
+                    # Provide more specific error messages for common issues
+                    if "STRING_TOO_LONG" in error_msg:
+                        if "City" in error_msg:
+                            return {'success': False, 'error': 'Address city field is too long. Please use a shorter address.'}
+                        else:
+                            return {'success': False, 'error': 'One of the address fields is too long. Please shorten your address details.'}
+                    elif "REQUIRED_FIELD_MISSING" in error_msg:
+                        return {'success': False, 'error': 'Required field missing. Please ensure all address information is complete.'}
+                    else:
+                        return {'success': False, 'error': f'Khazenly API error (Code {result_code}): {error_msg}'}
             else:
-                logger.error(f"HTTP error creating Khazenly order: {response.status_code} - {response.text}")
-                return {'success': False, 'error': f'HTTP {response.status_code}: {response.text}'}
+                logger.error(f"❌ HTTP error creating Khazenly order: {response.status_code}")
+                logger.error(f"❌ Response headers: {dict(response.headers)}")
+                logger.error(f"❌ Response text: {response.text}")
+                
+                # Try to parse error response
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('message', error_data.get('error', f'HTTP {response.status_code}'))
+                except:
+                    error_msg = f'HTTP {response.status_code}: {response.text[:200]}...' if len(response.text) > 200 else response.text
+                
+                return {'success': False, 'error': f'Khazenly API error: {error_msg}'}
                 
         except Exception as e:
             logger.error(f"Exception creating Khazenly order: {e}")
