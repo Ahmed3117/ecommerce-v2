@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.db.models import Sum
 from django.utils.html import format_html
 from django.utils import timezone
+from django.http import HttpResponse
 from .models import (
     Category, SubCategory, Brand, Product, ProductImage, ProductDescription,
     Color, ProductAvailability, Shipping, PillItem, Pill, PillAddress,
@@ -10,8 +11,18 @@ from .models import (
     SpinWheelResult, SpinWheelSettings, PillGift, KhazenlyWebhookLog
 )
 
-
 import json
+try:
+    import xlsxwriter
+    EXCEL_AVAILABLE = True
+except ImportError:
+    try:
+        import openpyxl
+        EXCEL_AVAILABLE = True
+    except ImportError:
+        EXCEL_AVAILABLE = False
+import io
+from datetime import datetime
 
 class GovernmentListFilter(admin.SimpleListFilter):
     title = 'Government'
@@ -197,7 +208,7 @@ class PillAdmin(admin.ModelAdmin):
     search_fields = ['pill_number', 'user__username']
     readonly_fields = ['pill_number']
     list_editable = ['paid', 'status']
-    actions = ['send_to_khazenly_bulk']
+    actions = ['send_to_khazenly_bulk', 'export_to_excel_for_khazenly']
 
     def final_price_display(self, obj):
         return obj.final_price()
@@ -336,6 +347,402 @@ class PillAdmin(admin.ModelAdmin):
             )
 
         return redirect('admin:products_pill_changelist')
+
+    @admin.action(description='Export selected pills to Excel for Khazenly manual import')
+    def export_to_excel_for_khazenly(self, request, queryset):
+        """Export selected pills to Excel with all Khazenly order data"""
+        
+        # Check if Excel libraries are available
+        if not EXCEL_AVAILABLE:
+            self.message_user(
+                request,
+                '❌ Excel export not available. Please install xlsxwriter or openpyxl: pip install xlsxwriter',
+                level='ERROR'
+            )
+            return None
+            
+        try:
+            # Create workbook and worksheet
+            output = io.BytesIO()
+            # Enable remove_timezone to avoid xlsxwriter TypeError with aware datetimes
+            workbook = xlsxwriter.Workbook(output, {
+                'in_memory': True,
+                'remove_timezone': True
+            })
+
+            # Helper to make a datetime naive (Excel can't store tz info)
+            from django.utils import timezone as dj_tz
+            def _naive(dt):
+                try:
+                    from datetime import datetime as _dt
+                    if isinstance(dt, _dt) and getattr(dt, 'tzinfo', None) is not None:
+                        return dj_tz.localtime(dt).replace(tzinfo=None)
+                except Exception:
+                    pass
+                return dt
+            
+            # Create worksheets
+            orders_sheet = workbook.add_worksheet('Orders')
+            items_sheet = workbook.add_worksheet('Line Items')
+            
+            # Define formats
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#4472C4',
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center'
+            })
+            
+            cell_format = workbook.add_format({
+                'border': 1,
+                'text_wrap': True,
+                'valign': 'top'
+            })
+            
+            currency_format = workbook.add_format({
+                'border': 1,
+                'num_format': '#,##0.00',
+                'valign': 'top'
+            })
+            
+            date_format = workbook.add_format({
+                'border': 1,
+                'num_format': 'yyyy-mm-dd hh:mm:ss',
+                'valign': 'top'
+            })
+
+            # Orders sheet headers
+            order_headers = [
+                'Order ID', 'Order Number', 'Store Name', 'Customer Name', 'Primary Tel',
+                'Secondary Tel', 'Email', 'Address1', 'Address2', 'City', 'Government',
+                'Country', 'Customer ID', 'Total Amount', 'Shipping Fees', 'Gift Discount',
+                'Coupon Discount', 'Additional Notes', 'Created Date', 'User ID', 'User Email',
+                'Payment Status', 'Khazenly Status', 'Line Items Count', 'lineItems JSON'
+            ]
+            
+            # Write order headers
+            for col, header in enumerate(order_headers):
+                orders_sheet.write(0, col, header, header_format)
+                if header == 'lineItems JSON':
+                    orders_sheet.set_column(col, col, 60)
+                else:
+                    orders_sheet.set_column(col, col, 15)  # Set column width
+            
+            # Line items sheet headers
+            item_headers = [
+                'Order Number', 'Order ID', 'SKU', 'Item Name', 'Price', 'Quantity',
+                'Discount Amount', 'Item ID', 'Product ID', 'Product Number',
+                'Original Price', 'Color', 'Size', 'Line Total'
+            ]
+            
+            # Write item headers
+            for col, header in enumerate(item_headers):
+                items_sheet.write(0, col, header, header_format)
+                items_sheet.set_column(col, col, 15)  # Set column width
+            
+            # Import Khazenly service to get the data structure
+            from services.khazenly_service import khazenly_service
+            
+            order_row = 1
+            item_row = 1
+            processed_pills = 0
+            skip_stats = { 'no_address': 0, 'no_items': 0, 'exception': 0 }
+            error_rows = []  # (pill_number, message)
+            
+            for pill in queryset:
+                try:
+                    # Debug: Check pill structure
+                    print(f"Processing pill: {pill.pill_number}")
+                    
+                    # Check for address - PillAddress has OneToOne relationship
+                    address = None
+                    try:
+                        address = pill.pilladdress
+                        print(f"Found address: {address.name} - {address.address}")
+                    except Exception as e:
+                        print(f"No address found for pill {pill.pill_number}: {e}")
+                        skip_stats['no_address'] += 1
+                        error_rows.append((pill.pill_number, f"No address: {e}"))
+                        continue
+                    
+                    if not address:
+                        print(f"Address is None for pill {pill.pill_number}")
+                        skip_stats['no_address'] += 1
+                        error_rows.append((pill.pill_number, "Address relation empty"))
+                        continue
+                        
+                    # Get pill items - try both relationships
+                    pill_items = None
+                    items_count = 0
+                    
+                    # Try many-to-many first
+                    try:
+                        pill_items = pill.items.all()
+                        items_count = pill_items.count()
+                        print(f"Found {items_count} items via M2M relationship")
+                    except Exception as e:
+                        print(f"M2M items failed: {e}")
+                    
+                    # If M2M didn't work or returned 0, try reverse FK
+                    if not pill_items or items_count == 0:
+                        try:
+                            pill_items = pill.pill_items.all()
+                            items_count = pill_items.count()
+                            print(f"Found {items_count} items via reverse FK relationship")
+                        except Exception as e:
+                            print(f"Reverse FK items failed: {e}")
+                    
+                    # Skip pills with no items
+                    if not pill_items or items_count == 0:
+                        print(f"No items found for pill {pill.pill_number}")
+                        skip_stats['no_items'] += 1
+                        error_rows.append((pill.pill_number, "No items attached"))
+                        continue
+                    
+                    print(f"Processing pill {pill.pill_number} with {items_count} items")
+                    
+                    # Generate the same data structure as in Khazenly service
+                    from django.utils import timezone
+                    timestamp_suffix = int(timezone.now().timestamp())
+                    unique_order_id = f"{pill.pill_number}-{timestamp_suffix}"
+                    
+                    # Get government display + city name
+                    city_name = "Cairo"
+                    government_display = ''
+                    if hasattr(address, 'government') and address.government:
+                        from products.models import GOVERNMENT_CHOICES
+                        gov_dict = dict(GOVERNMENT_CHOICES)
+                        government_name = gov_dict.get(address.government, address.government)
+                        government_display = government_name
+                        city_part = address.city if address.city else ""
+                        if city_part:
+                            full_city = f"{government_name} - {city_part}"
+                            if len(full_city) > 80:
+                                max_city_length = 80 - len(government_name) - 3
+                                if max_city_length > 0:
+                                    truncated_city = city_part[:max_city_length].strip()
+                                    city_name = f"{government_name} - {truncated_city}"
+                                else:
+                                    city_name = government_name[:80]
+                            else:
+                                city_name = full_city
+                        else:
+                            city_name = government_name
+                    elif address.city:
+                        city_name = address.city[:80] if len(address.city) > 80 else address.city
+                    
+                    # Prepare phone numbers
+                    phone_numbers = []
+                    if pill.user.phone:
+                        phone_numbers.append(pill.user.phone)
+                    if address.phone:
+                        phone_numbers.append(address.phone)
+                    
+                    unique_phones = list(dict.fromkeys(phone_numbers))
+                    primary_tel = address.phone if address.phone else (unique_phones[0] if unique_phones else "")
+                    secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
+                    secondary_tel = " | ".join(secondary_phones) if secondary_phones else ""
+                    
+                    # Calculate amounts
+                    line_items = []
+                    total_product_price = 0
+                    
+                    for item in pill_items:
+                        product = item.product
+                        original_price = float(product.price) if product.price else 0
+                        discounted_price = float(product.discounted_price())
+                        item_total = discounted_price * item.quantity
+                        item_discount = (original_price - discounted_price) * item.quantity
+                        total_product_price += item_total
+                        
+                        # Build item description
+                        color_text = f" - {item.color.name}" if item.color else ""
+                        size_text = f" - Size: {item.size}" if item.size else ""
+                        item_description = f"{product.name}{color_text}{size_text}"
+                        item_description = item_description[:150]
+                        
+                        line_items.append({
+                            'sku': product.product_number if product.product_number else f"PROD-{product.id}",
+                            'item_name': item_description,
+                            'price': discounted_price,
+                            'quantity': item.quantity,
+                            'discount_amount': item_discount,
+                            'item_id': item.id,
+                            'product_id': product.id,
+                            'product_number': product.product_number or '',
+                            'original_price': original_price,
+                            'color': item.color.name if item.color else '',
+                            'size': item.size or '',
+                            'line_total': item_total
+                        })
+                    
+                    shipping_fees = float(pill.shipping_price())
+                    gift_discount = float(pill.calculate_gift_discount())
+                    coupon_discount = float(pill.coupon_discount) if pill.coupon_discount else 0
+                    total_discount = gift_discount + coupon_discount
+                    total_amount = total_product_price + shipping_fees - total_discount
+                    
+                    # Prepare lineItems JSON snip for convenience (schema similar to Khazenly service)
+                    line_items_json_data = [
+                        {
+                            'sku': li['sku'],
+                            'itemName': li['item_name'],
+                            'price': li['price'],
+                            'quantity': li['quantity'],
+                            'discountAmount': li['discount_amount'],
+                            'itemId': li['item_id']
+                        } for li in line_items
+                    ]
+                    line_items_json_str = json.dumps(line_items_json_data, ensure_ascii=False)
+
+                    # Write order data (extended columns at end)
+                    order_data = [
+                        unique_order_id,  # Order ID
+                        pill.pill_number,  # Order Number
+                        'BOOKIFAY',  # Store Name
+                        address.name or pill.user.name or pill.user.username,  # Customer Name
+                        primary_tel,  # Primary Tel
+                        secondary_tel,  # Secondary Tel
+                        pill.user.email,  # Email
+                        address.address or '',  # Address1
+                        getattr(address, 'detailed_address', '') or '',  # Address2 (safe)
+                        city_name,  # City
+                        government_display,  # Government (display)
+                        'Egypt',  # Country
+                        f"USER-{pill.user.id}",  # Customer ID
+                        total_amount,  # Total Amount
+                        shipping_fees,  # Shipping Fees
+                        gift_discount,  # Gift Discount
+                        coupon_discount,  # Coupon Discount
+                        f"Prepaid order for pill {pill.pill_number} - {len(line_items)} items",  # Additional Notes
+                        getattr(pill, 'created_at', None) or getattr(pill, 'date_added', None),  # Created Date
+                        pill.user.id,  # User ID
+                        pill.user.email,  # User Email
+                        'Paid' if pill.paid else 'Unpaid',  # Payment Status
+                        'Has Order' if pill.has_khazenly_order else 'Pending',  # Khazenly Status
+                        len(line_items),  # Line Items Count
+                        line_items_json_str  # lineItems JSON
+                    ]
+                    
+                    for col, value in enumerate(order_data):
+                        if isinstance(value, (int, float)) and col in [13, 14, 15, 16]:  # Currency columns
+                            orders_sheet.write(order_row, col, value, currency_format)
+                        elif isinstance(value, datetime):
+                            orders_sheet.write(order_row, col, _naive(value), date_format)
+                        else:
+                            orders_sheet.write(order_row, col, value, cell_format)
+                    
+                    # Write line items
+                    for item in line_items:
+                        item_data = [
+                            pill.pill_number,  # Order Number
+                            unique_order_id,  # Order ID
+                            item['sku'],  # SKU
+                            item['item_name'],  # Item Name
+                            item['price'],  # Price
+                            item['quantity'],  # Quantity
+                            item['discount_amount'],  # Discount Amount
+                            item['item_id'],  # Item ID
+                            item['product_id'],  # Product ID
+                            item['product_number'],  # Product Number
+                            item['original_price'],  # Original Price
+                            item['color'],  # Color
+                            item['size'],  # Size
+                            item['line_total']  # Line Total
+                        ]
+                        
+                        for col, value in enumerate(item_data):
+                            if isinstance(value, (int, float)) and col in [4, 6, 10, 13]:  # Currency columns
+                                items_sheet.write(item_row, col, value, currency_format)
+                            else:
+                                items_sheet.write(item_row, col, value, cell_format)
+                        
+                        item_row += 1
+                    
+                    order_row += 1
+                    processed_pills += 1
+                    
+                except Exception as e:
+                    # Capture exception details but continue
+                    from traceback import format_exc
+                    print(f"Error exporting pill {getattr(pill,'pill_number','?')}: {e}\n{format_exc()}")
+                    skip_stats['exception'] += 1
+                    error_rows.append((getattr(pill,'pill_number','?'), f"Exception: {e}"))
+                    continue
+            
+            # Add summary sheet
+            summary_sheet = workbook.add_worksheet('Summary')
+            summary_sheet.write(0, 0, 'Export Summary', header_format)
+            summary_sheet.write(1, 0, 'Total Pills Selected:', cell_format)
+            summary_sheet.write(1, 1, len(queryset), cell_format)
+            summary_sheet.write(2, 0, 'Pills Processed:', cell_format)
+            summary_sheet.write(2, 1, processed_pills, cell_format)
+            summary_sheet.write(3, 0, 'Total Orders:', cell_format)
+            summary_sheet.write(3, 1, order_row - 1, cell_format)
+            summary_sheet.write(4, 0, 'Total Line Items:', cell_format)
+            summary_sheet.write(4, 1, item_row - 1, cell_format)
+            summary_sheet.write(5, 0, 'Skipped (No Address):', cell_format)
+            summary_sheet.write(5, 1, skip_stats['no_address'], cell_format)
+            summary_sheet.write(6, 0, 'Skipped (No Items):', cell_format)
+            summary_sheet.write(6, 1, skip_stats['no_items'], cell_format)
+            summary_sheet.write(7, 0, 'Exceptions:', cell_format)
+            summary_sheet.write(7, 1, skip_stats['exception'], cell_format)
+            summary_sheet.write(8, 0, 'Export Date:', cell_format)
+            summary_sheet.write(8, 1, datetime.now(), date_format)
+            summary_sheet.write(9, 0, 'Instructions:', header_format)
+            summary_sheet.write(10, 0, '1. Send the "Orders" sheet data to Khazenly for order creation', cell_format)
+            summary_sheet.write(11, 0, '2. The "Line Items" sheet contains detailed product information', cell_format)
+            summary_sheet.write(12, 0, '3. All amounts are in EGP', cell_format)
+            if error_rows:
+                error_sheet = workbook.add_worksheet('Errors')
+                error_sheet.write(0,0,'Pill Number', header_format)
+                error_sheet.write(0,1,'Reason', header_format)
+                erow = 1
+                for pn, msg in error_rows:
+                    error_sheet.write(erow,0,pn,cell_format)
+                    error_sheet.write(erow,1,msg,cell_format)
+                    erow += 1
+            
+            workbook.close()
+            
+            zero_processed = processed_pills == 0
+            
+            # Create HTTP response
+            output.seek(0)
+            response = HttpResponse(
+                output.read(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            
+            # Set filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'khazenly_orders_export_{timestamp}.xlsx'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            
+            # Add message (success or warning) but still return file
+            if zero_processed:
+                self.message_user(
+                    request,
+                    f'⚠️ Export file generated but no pills qualified (Selected: {len(queryset)}). Check that each pill has an address + items.',
+                    level='WARNING'
+                )
+            else:
+                self.message_user(
+                    request,
+                    f'✅ Exported {processed_pills} pills with {item_row - 1} items to Excel file: {filename}',
+                    level='SUCCESS'
+                )
+            
+            return response
+            
+        except Exception as e:
+            self.message_user(
+                request,
+                f'❌ Error exporting to Excel: {str(e)}',
+                level='ERROR'
+            )
+            return None
     
 
 @admin.register(Discount)
