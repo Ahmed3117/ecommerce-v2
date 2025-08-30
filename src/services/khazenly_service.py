@@ -248,7 +248,8 @@ class KhazenlyService:
             primary_tel = address.phone if address.phone else (unique_phones[0] if unique_phones else "")
             
             # For secondaryTel, get other unique phones excluding the primary tel
-            secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
+            # secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
+            secondary_phones = [phone for phone in unique_phones]
             secondary_tel = " | ".join(secondary_phones) if secondary_phones else ""
             
             # Get proper city name from government choices
@@ -309,7 +310,7 @@ class KhazenlyService:
                 },
                 "Customer": {
                     "customerName": (address.name or f"Customer {pill.user.username}")[:50],  # Limit name length
-                    "tel": primary_tel,  # Primary phone (address.phone or first available)
+                    "tel": secondary_tel,  # Primary phone (address.phone or first available)
                     "secondaryTel": secondary_tel,  # Other unique phones separated by " | "
                     "address1": (address.address or "Address not provided")[:100],  # Limit address length
                     "address2": "",
