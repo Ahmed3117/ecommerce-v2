@@ -496,7 +496,7 @@ class CreateEasyPayInvoiceView(APIView):
                 # Update pill with invoice data from successful response
                 pill.easypay_invoice_uid = result['data']['invoice_uid']
                 pill.easypay_invoice_sequence = result['data']['invoice_sequence']
-                pill.easypay_fawry_ref = result['data']['fawry_ref']
+                pill.easypay_fawry_ref = result['data']['invoice_details']['fawry_ref']
                 pill.easypay_data = result['data']
                 pill.easypay_created_at = timezone.now()
                 pill.payment_gateway = 'easypay'
