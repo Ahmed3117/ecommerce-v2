@@ -249,8 +249,17 @@ class KhazenlyService:
             
             # For secondaryTel, get other unique phones excluding the primary tel
             # secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
-            secondary_phones = [phone for phone in unique_phones]
-            secondary_tel = " | ".join(secondary_phones) if secondary_phones else ""
+            # For secondaryTel, use the first unique phone if it's different from primary_tel,
+            # otherwise use the second unique phone if available
+            if unique_phones:
+                if unique_phones[0] != primary_tel:
+                    secondary_tel = unique_phones[0]
+                elif len(unique_phones) > 1:
+                    secondary_tel = unique_phones[1]
+                else:
+                    secondary_tel = ""
+            else:
+                secondary_tel = ""
             
             # Get proper city name from government choices
             city_name = "Cairo"  # Default fallback
@@ -310,7 +319,7 @@ class KhazenlyService:
                 },
                 "Customer": {
                     "customerName": (address.name or f"Customer {pill.user.username}")[:50],  # Limit name length
-                    "tel": secondary_tel,  # Primary phone (address.phone or first available)
+                    "tel": primary_tel,  # Primary phone (address.phone or first available)
                     "secondaryTel": secondary_tel,  # Other unique phones separated by " | "
                     "address1": (address.address or "Address not provided")[:100],  # Limit address length
                     "address2": "",
