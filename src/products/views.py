@@ -1175,7 +1175,7 @@ class PillListCreateView(generics.ListCreateAPIView):
     serializer_class = PillCreateSerializer
     filter_backends = [DjangoFilterBackend, rest_filters.SearchFilter]
     filterset_class = PillFilter
-    search_fields = ['pilladdress__phone', 'pilladdress__government', 'pilladdress__name', 'user__name', 'user__username', 'pill_number','user__phone','user__parent_phone']
+    search_fields = ['pilladdress__phone', 'pilladdress__government', 'pilladdress__name', 'user__name', 'user__username', 'pill_number','user__phone','user__parent_phone','shakeout_invoice_id', 'shakeout_invoice_ref', 'easypay_invoice_uid', 'easypay_invoice_sequence' , 'easypay_fawry_ref']
     pagination_class = CustomPageNumberPagination
     # permission_classes = [IsAdminOrHasEndpointPermission]
 

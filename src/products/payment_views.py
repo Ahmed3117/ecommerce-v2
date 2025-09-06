@@ -496,6 +496,7 @@ class CreateEasyPayInvoiceView(APIView):
                 # Update pill with invoice data from successful response
                 pill.easypay_invoice_uid = result['data']['invoice_uid']
                 pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                pill.easypay_fawry_ref = result['data']['fawry_ref']
                 pill.easypay_data = result['data']
                 pill.easypay_created_at = timezone.now()
                 pill.payment_gateway = 'easypay'
@@ -655,6 +656,80 @@ class CreatePaymentInvoiceView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class CheckEasyPayInvoiceStatusView(APIView):
+    # authentication_classes = [CustomJWTAuthentication]
+    # permission_classes = [IsAuthenticated]
+    
+    def get(self, request, pill_id):
+        """Check EasyPay invoice status and update pill if paid"""
+        try:
+            pill = get_object_or_404(Pill, id=pill_id)
+            
+            # Check if pill has EasyPay Fawry reference
+            if not pill.easypay_fawry_ref:
+                return Response({
+                    'success': False,
+                    'error': 'This pill does not have an EasyPay Fawry reference'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"Checking EasyPay status for pill {pill_id} with Fawry ref: {pill.easypay_fawry_ref}")
+            
+            # Use EasyPay service to check invoice status
+            result = easypay_service.check_invoice_status(pill.easypay_fawry_ref)
+            
+            if not result['success']:
+                logger.error(f"EasyPay status check failed for pill {pill_id}: {result['error']}")
+                return Response({
+                    'success': False,
+                    'error': result['error'],
+                    'payment_status': 'unknown'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Extract payment status from EasyPay response
+            easypay_data = result['data']
+            payment_status = easypay_data.get('payment_status', 'unknown')
+            
+            logger.info(f"EasyPay status for pill {pill_id}: {payment_status}")
+            
+            # Update pill if payment is confirmed in EasyPay but not in our system
+            updated = False
+            if payment_status.lower() == 'paid' and not pill.paid:
+                logger.info(f"Updating pill {pill_id} as paid (confirmed by EasyPay)")
+                pill.paid = True
+                pill.status = 'p'  # Set status to paid
+                pill.save(update_fields=['paid', 'status'])
+                updated = True
+                
+                logger.info(f"Pill {pill_id} payment status updated successfully")
+            
+            return Response({
+                'success': True,
+                'payment_status': payment_status,
+                'updated': updated,
+                'data': {
+                    'pill_number': pill.pill_number,
+                    'pill_id': pill.id,
+                    'paid': pill.paid,
+                    'status': pill.get_status_display(),
+                    'total_amount': float(pill.final_price()),
+                    'currency': 'EGP',
+                    'easypay_fawry_ref': pill.easypay_fawry_ref,
+                    'easypay_payment_status': payment_status,
+                    'easypay_data': easypay_data
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Exception checking EasyPay status for pill {pill_id}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'success': False,
+                'error': f'Server error: {str(e)}',
+                'payment_status': 'unknown'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 # Instantiate the new views
 create_easypay_invoice_view = CreateEasyPayInvoiceView.as_view()
 create_payment_invoice_view = CreatePaymentInvoiceView.as_view()
@@ -662,3 +737,4 @@ payment_success_view = PaymentSuccessView.as_view()
 payment_failed_view = PaymentFailedView.as_view()
 payment_pending_view = PaymentPendingView.as_view()
 check_payment_status_view = CheckPaymentStatusView.as_view()
+check_easypay_invoice_status_view = CheckEasyPayInvoiceStatusView.as_view()

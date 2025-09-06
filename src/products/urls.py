@@ -139,6 +139,8 @@ urlpatterns = [
     path('pills/<int:pill_id>/create-shakeout-invoice/', payment_views.create_shakeout_invoice_view, name='create_shakeout_invoice'),
     # EasyPay Invoice Creation Endpoint
     path('pills/<int:pill_id>/create-easypay-invoice/', payment_views.create_easypay_invoice_view, name='create_easypay_invoice'),
+    # EasyPay Invoice Status Check Endpoint
+    path('pills/<int:pill_id>/check-easypay-status/', payment_views.check_easypay_invoice_status_view, name='check_easypay_status'),
     # Generic Payment Invoice Creation Endpoint
     path('pills/<int:pill_id>/create-payment-invoice/', payment_views.create_payment_invoice_view, name='create_payment_invoice'),
     

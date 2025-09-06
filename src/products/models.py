@@ -524,6 +524,7 @@ class Pill(models.Model):
     # EasyPay fields
     easypay_invoice_uid = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice UID")
     easypay_invoice_sequence = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice sequence")
+    easypay_fawry_ref = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay Fawry reference")
     easypay_data = models.JSONField(null=True, blank=True, help_text="EasyPay invoice response data")
     easypay_created_at = models.DateTimeField(null=True, blank=True, help_text="When the EasyPay invoice was created")
     

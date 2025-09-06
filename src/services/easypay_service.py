@@ -328,6 +328,64 @@ class EasyPayService:
             logger.error(f"Error verifying EasyPay webhook signature: {str(e)}")
             return False
 
+    def check_invoice_status(self, fawry_ref):
+        """Check invoice status from EasyPay using Fawry reference"""
+        try:
+            logger.info(f"Checking EasyPay invoice status for Fawry ref: {fawry_ref}")
+            
+            # EasyPay invoice status check URL
+            status_check_url = f"{self.base_url}/invoice-status-check/"
+            
+            # Parameters for the request
+            params = {
+                'vendor_code': self.vendor_code,
+                'fawry_ref': fawry_ref
+            }
+            
+            # Make API request
+            response = requests.get(
+                status_check_url,
+                params=params,
+                headers=self.headers,
+                timeout=30
+            )
+            
+            logger.info(f"EasyPay status check response status: {response.status_code}")
+            logger.info(f"EasyPay status check response: {response.text}")
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                return {
+                    'success': True,
+                    'data': response_data
+                }
+            else:
+                logger.error(f"EasyPay status check failed with status {response.status_code}: {response.text}")
+                return {
+                    'success': False,
+                    'error': f"API returned status {response.status_code}",
+                    'response': response.text
+                }
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error during EasyPay status check: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Network error: {str(e)}"
+            }
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse EasyPay status check response: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Invalid JSON response: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error during EasyPay status check: {str(e)}")
+            return {
+                'success': False,
+                'error': f"Unexpected error: {str(e)}"
+            }
+
 
 # Create a singleton instance
 easypay_service = EasyPayService()

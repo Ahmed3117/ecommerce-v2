@@ -925,3 +925,9 @@ admin.site.register(PillStatusLog)
 admin.site.register(PriceDropAlert)
 admin.site.register(SpinWheelResult)
 admin.site.register(SpinWheelSettings)
+
+
+
+
+
+
