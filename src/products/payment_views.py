@@ -458,9 +458,10 @@ class CreateEasyPayInvoiceView(APIView):
                     # Clear old invoice data to create a new one
                     pill.easypay_invoice_uid = None
                     pill.easypay_invoice_sequence = None
+                    pill.easypay_fawry_ref = None
                     pill.easypay_data = None
                     pill.easypay_created_at = None
-                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at'])
+                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at'])
                 else:
                     logger.warning(f"Pill {pill_id} already has active EasyPay invoice: {pill.easypay_invoice_uid}")
                     return Response({
@@ -469,6 +470,7 @@ class CreateEasyPayInvoiceView(APIView):
                         'data': {
                             'invoice_uid': pill.easypay_invoice_uid,
                             'invoice_sequence': pill.easypay_invoice_sequence,
+                            'fawry_ref': pill.easypay_fawry_ref,
                             'payment_url': pill.easypay_payment_url,
                             'created_at': pill.easypay_created_at.isoformat() if pill.easypay_created_at else None,
                             'status': 'active'
@@ -496,11 +498,13 @@ class CreateEasyPayInvoiceView(APIView):
                 # Update pill with invoice data from successful response
                 pill.easypay_invoice_uid = result['data']['invoice_uid']
                 pill.easypay_invoice_sequence = result['data']['invoice_sequence']
-                pill.easypay_fawry_ref = result['data']['invoice_details']['fawry_ref']
+                # Safely extract fawry_ref from nested invoice_details
+                invoice_details = result['data'].get('invoice_details', {})
+                pill.easypay_fawry_ref = invoice_details.get('fawry_ref')
                 pill.easypay_data = result['data']
                 pill.easypay_created_at = timezone.now()
                 pill.payment_gateway = 'easypay'
-                pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+                pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
                 
                 logger.info(f"Successfully created EasyPay invoice for pill {pill_id}")
                 return Response({
@@ -570,6 +574,7 @@ class CreatePaymentInvoiceView(APIView):
                         'data': {
                             'invoice_uid': pill.easypay_invoice_uid,
                             'invoice_sequence': pill.easypay_invoice_sequence,
+                            'fawry_ref': pill.easypay_fawry_ref,
                             'payment_url': pill.easypay_payment_url,
                             'payment_gateway': 'easypay'
                         }
@@ -580,11 +585,14 @@ class CreatePaymentInvoiceView(APIView):
                 if result['success']:
                     pill.easypay_invoice_uid = result['data']['invoice_uid']
                     pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                    # Safely extract fawry_ref from nested invoice_details
+                    invoice_details = result['data'].get('invoice_details', {})
+                    pill.easypay_fawry_ref = invoice_details.get('fawry_ref')
                     pill.easypay_data = result['data']
                     pill.easypay_created_at = timezone.now()
                     pill.payment_gateway = 'easypay'
-                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
-                    
+                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+
                     return Response({
                         'success': True,
                         'message': 'EasyPay invoice created successfully',
