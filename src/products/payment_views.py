@@ -496,11 +496,22 @@ class CreateEasyPayInvoiceView(APIView):
             
             if result['success']:
                 # Update pill with invoice data from successful response
-                pill.easypay_invoice_uid = result['data']['invoice_uid']
-                pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                invoice_uid = result['data'].get('invoice_uid', '')
+                invoice_sequence = result['data'].get('invoice_sequence', '')
+                
                 # Safely extract fawry_ref from nested invoice_details
                 invoice_details = result['data'].get('invoice_details', {})
-                pill.easypay_fawry_ref = invoice_details.get('fawry_ref')
+                fawry_ref = invoice_details.get('fawry_ref', '')
+                if fawry_ref:
+                    fawry_ref = str(fawry_ref)
+                
+                # Log field values for debugging
+                logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
+                
+                # Update pill fields
+                pill.easypay_invoice_uid = invoice_uid
+                pill.easypay_invoice_sequence = invoice_sequence
+                pill.easypay_fawry_ref = fawry_ref
                 pill.easypay_data = result['data']
                 pill.easypay_created_at = timezone.now()
                 pill.payment_gateway = 'easypay'
@@ -583,11 +594,23 @@ class CreatePaymentInvoiceView(APIView):
                 result = easypay_service.create_payment_invoice(pill)
                 
                 if result['success']:
-                    pill.easypay_invoice_uid = result['data']['invoice_uid']
-                    pill.easypay_invoice_sequence = result['data']['invoice_sequence']
+                    # Extract invoice data from successful response
+                    invoice_uid = result['data'].get('invoice_uid', '')
+                    invoice_sequence = result['data'].get('invoice_sequence', '')
+                    
                     # Safely extract fawry_ref from nested invoice_details
                     invoice_details = result['data'].get('invoice_details', {})
-                    pill.easypay_fawry_ref = invoice_details.get('fawry_ref')
+                    fawry_ref = invoice_details.get('fawry_ref', '')
+                    if fawry_ref:
+                        fawry_ref = str(fawry_ref)
+                    
+                    # Log field values for debugging
+                    logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
+                    
+                    # Update pill fields
+                    pill.easypay_invoice_uid = invoice_uid
+                    pill.easypay_invoice_sequence = invoice_sequence
+                    pill.easypay_fawry_ref = fawry_ref
                     pill.easypay_data = result['data']
                     pill.easypay_created_at = timezone.now()
                     pill.payment_gateway = 'easypay'

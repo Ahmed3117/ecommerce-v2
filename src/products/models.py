@@ -510,21 +510,21 @@ class Pill(models.Model):
     # Khazenly fields
     is_shipped = models.BooleanField(default=False)
     khazenly_data = models.JSONField(null=True, blank=True)
-    khazenly_order_id = models.CharField(max_length=100, null=True, blank=True, help_text="Khazenly internal order ID")
-    khazenly_sales_order_number = models.CharField(max_length=100, null=True, blank=True, help_text="Khazenly sales order number (KH-BOOKIFAY-xxxxx)")
-    khazenly_order_number = models.CharField(max_length=100, null=True, blank=True, help_text="Order number sent to Khazenly")
+    khazenly_order_id = models.CharField(max_length=255, null=True, blank=True, help_text="Khazenly internal order ID")
+    khazenly_sales_order_number = models.CharField(max_length=255, null=True, blank=True, help_text="Khazenly sales order number (KH-BOOKIFAY-xxxxx)")
+    khazenly_order_number = models.CharField(max_length=255, null=True, blank=True, help_text="Order number sent to Khazenly")
     khazenly_created_at = models.DateTimeField(null=True, blank=True, help_text="When the Khazenly order was created")
     
     # Shake-out fields (replacing Fawaterak)
-    shakeout_invoice_id = models.CharField(max_length=100, null=True, blank=True, help_text="Shake-out invoice ID")
-    shakeout_invoice_ref = models.CharField(max_length=100, null=True, blank=True, help_text="Shake-out invoice reference")
+    shakeout_invoice_id = models.CharField(max_length=255, null=True, blank=True, help_text="Shake-out invoice ID")
+    shakeout_invoice_ref = models.CharField(max_length=255, null=True, blank=True, help_text="Shake-out invoice reference")
     shakeout_data = models.JSONField(null=True, blank=True, help_text="Shake-out invoice response data")
     shakeout_created_at = models.DateTimeField(null=True, blank=True, help_text="When the Shake-out invoice was created")
     
     # EasyPay fields
-    easypay_invoice_uid = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice UID")
-    easypay_invoice_sequence = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay invoice sequence")
-    easypay_fawry_ref = models.CharField(max_length=100, null=True, blank=True, help_text="EasyPay Fawry reference")
+    easypay_invoice_uid = models.CharField(max_length=255, null=True, blank=True, help_text="EasyPay invoice UID")
+    easypay_invoice_sequence = models.CharField(max_length=255, null=True, blank=True, help_text="EasyPay invoice sequence")
+    easypay_fawry_ref = models.CharField(max_length=255, null=True, blank=True, help_text="EasyPay Fawry reference")
     easypay_data = models.JSONField(null=True, blank=True, help_text="EasyPay invoice response data")
     easypay_created_at = models.DateTimeField(null=True, blank=True, help_text="When the EasyPay invoice was created")
     
