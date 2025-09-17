@@ -1,6 +1,7 @@
 import requests
 import json
 import logging
+import re
 from django.conf import settings
 from django.core.cache import cache
 from datetime import datetime, timedelta
@@ -261,6 +262,51 @@ class KhazenlyService:
             else:
                 secondary_tel = ""
             
+            # Validate and sanitize customer data
+            def sanitize_text(text, max_length, field_name="field"):
+                """Sanitize text by removing invalid characters and limiting length"""
+                if not text:
+                    return ""
+                
+                # Remove special characters that might cause issues
+                import re
+                # Keep Arabic, English letters, numbers, spaces, and basic punctuation
+                sanitized = re.sub(r'[^\w\s\-.,()[\]]+', '', str(text))
+                
+                # Limit length
+                if len(sanitized) > max_length:
+                    logger.warning(f"Truncating {field_name} from {len(sanitized)} to {max_length} characters")
+                    sanitized = sanitized[:max_length].strip()
+                
+                return sanitized
+            
+            def validate_phone(phone):
+                """Validate and sanitize phone number"""
+                if not phone:
+                    return ""
+                
+                # Remove non-digit characters
+                import re
+                digits_only = re.sub(r'\D', '', str(phone))
+                
+                # Egyptian phone validation - should be 10 or 11 digits
+                if len(digits_only) < 10 or len(digits_only) > 11:
+                    logger.warning(f"Invalid phone number length: {phone} -> {digits_only} ({len(digits_only)} digits)")
+                    if len(digits_only) > 11:
+                        # If too long, take the last 11 digits
+                        digits_only = digits_only[-11:]
+                    elif len(digits_only) < 10:
+                        # If too short, pad with zeros (not ideal but prevents API error)
+                        digits_only = digits_only.ljust(10, '0')
+                
+                # Ensure it starts with Egyptian country codes
+                if digits_only and not (digits_only.startswith('01') or digits_only.startswith('201')):
+                    # Add Egyptian mobile prefix if missing
+                    if len(digits_only) == 9:
+                        digits_only = '01' + digits_only
+                
+                return digits_only
+            
             # Get proper city name from government choices
             city_name = "Cairo"  # Default fallback
             if hasattr(address, 'government') and address.government:
@@ -292,6 +338,8 @@ class KhazenlyService:
                 if len(address.city) > 80:
                     logger.warning(f"City field truncated from '{address.city}' to '{city_name}' for Khazenly")
             
+            # Sanitize city name
+            city_name = sanitize_text(city_name, 80, "city")
             logger.info(f"Final city name for Khazenly: '{city_name}' (length: {len(city_name)})")
             
             # Build order data
@@ -318,10 +366,10 @@ class KhazenlyService:
                     "additionalNotes": f"Prepaid order for pill {pill.pill_number} - {len(line_items)} items - Payment completed via Shake-out"
                 },
                 "Customer": {
-                    "customerName": (address.name or f"Customer {pill.user.username}")[:50],  # Limit name length
-                    "tel": primary_tel,  # Primary phone (address.phone or first available)
-                    "secondaryTel": secondary_tel,  # Other unique phones separated by " | "
-                    "address1": (address.address or "Address not provided")[:100],  # Limit address length
+                    "customerName": sanitize_text(address.name or f"Customer {pill.user.username}", 50, "customerName"),
+                    "tel": validate_phone(primary_tel),
+                    "secondaryTel": validate_phone(secondary_tel),
+                    "address1": sanitize_text(address.address or "Address not provided", 100, "address1"),
                     "address2": "",
                     "address3": "",
                     "city": city_name,
@@ -330,6 +378,37 @@ class KhazenlyService:
                 },
                 "lineItems": line_items
             }
+            
+            # Validate customer data before sending
+            customer_data = order_data.get('Customer', {})
+            logger.info(f"🔍 Customer data validation:")
+            logger.info(f"  - customerName: '{customer_data.get('customerName')}' (len: {len(customer_data.get('customerName', ''))})")
+            logger.info(f"  - tel: '{customer_data.get('tel')}' (len: {len(customer_data.get('tel', ''))})")
+            logger.info(f"  - secondaryTel: '{customer_data.get('secondaryTel')}' (len: {len(customer_data.get('secondaryTel', ''))})")
+            logger.info(f"  - address1: '{customer_data.get('address1')}' (len: {len(customer_data.get('address1', ''))})")
+            logger.info(f"  - city: '{customer_data.get('city')}' (len: {len(customer_data.get('city', ''))})")
+            logger.info(f"  - customerId: '{customer_data.get('customerId')}'")
+            
+            # Validate required fields
+            validation_errors = []
+            if not customer_data.get('customerName'):
+                validation_errors.append("customerName is empty")
+            if not customer_data.get('tel'):
+                validation_errors.append("tel is empty")
+            if not customer_data.get('address1'):
+                validation_errors.append("address1 is empty")
+            if not customer_data.get('city'):
+                validation_errors.append("city is empty")
+            if not customer_data.get('customerId'):
+                validation_errors.append("customerId is empty")
+                
+            if validation_errors:
+                error_msg = f"Customer data validation failed: {', '.join(validation_errors)}"
+                logger.error(error_msg)
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
             
             # Debug logging for order structure
             logger.info(f"🔍 Order data structure created:")
@@ -413,6 +492,7 @@ class KhazenlyService:
                     logger.error(f"❌ Full response: {response_data}")
                     
                     # Provide more specific error messages for common issues
+                    error_msg_lower = error_msg.lower()
                     if "STRING_TOO_LONG" in error_msg:
                         if "City" in error_msg:
                             return {'success': False, 'error': 'Address city field is too long. Please use a shorter address.'}
@@ -420,6 +500,21 @@ class KhazenlyService:
                             return {'success': False, 'error': 'One of the address fields is too long. Please shorten your address details.'}
                     elif "REQUIRED_FIELD_MISSING" in error_msg:
                         return {'success': False, 'error': 'Required field missing. Please ensure all address information is complete.'}
+                    elif "corrupted customer data" in error_msg_lower or "wrong code" in error_msg_lower:
+                        # Log detailed customer data for debugging
+                        customer = order_data.get('Customer', {})
+                        logger.error(f"🚨 CORRUPTED CUSTOMER DATA DETAILS:")
+                        logger.error(f"  - customerName: '{customer.get('customerName')}' (type: {type(customer.get('customerName'))}, len: {len(str(customer.get('customerName', '')))})")
+                        logger.error(f"  - tel: '{customer.get('tel')}' (type: {type(customer.get('tel'))}, len: {len(str(customer.get('tel', '')))})")
+                        logger.error(f"  - secondaryTel: '{customer.get('secondaryTel')}' (type: {type(customer.get('secondaryTel'))}, len: {len(str(customer.get('secondaryTel', '')))})")
+                        logger.error(f"  - address1: '{customer.get('address1')}' (type: {type(customer.get('address1'))}, len: {len(str(customer.get('address1', '')))})")
+                        logger.error(f"  - city: '{customer.get('city')}' (type: {type(customer.get('city'))}, len: {len(str(customer.get('city', '')))})")
+                        logger.error(f"  - customerId: '{customer.get('customerId')}' (type: {type(customer.get('customerId'))})")
+                        
+                        return {
+                            'success': False, 
+                            'error': f'Corrupted customer data detected. Pill ID: {pill.id}, User ID: {pill.user.id}. Please check customer address information for invalid characters or formatting issues. Details: {error_msg}'
+                        }
                     else:
                         return {'success': False, 'error': f'Khazenly API error (Code {result_code}): {error_msg}'}
             else:
@@ -471,6 +566,119 @@ class KhazenlyService:
         except Exception as e:
             logger.error(f"Exception getting order status: {e}")
             return {'success': False, 'error': str(e)}
+
+    def diagnose_customer_data(self, pill):
+        """
+        Diagnose customer data issues that might cause Khazenly API errors
+        """
+        try:
+            logger.info(f"🔍 DIAGNOSING CUSTOMER DATA for Pill {pill.pill_number}:")
+            
+            if not hasattr(pill, 'pilladdress'):
+                return {
+                    'issues': ['Missing address information'],
+                    'details': 'Pill has no associated address (pilladdress)'
+                }
+            
+            address = pill.pilladdress
+            issues = []
+            details = {}
+            
+            # Check customer name
+            customer_name = address.name or f"Customer {pill.user.username}"
+            details['customerName'] = {
+                'value': customer_name,
+                'length': len(customer_name),
+                'contains_special_chars': bool(re.search(r'[^\w\s\-.,()[\]]+', customer_name))
+            }
+            if len(customer_name) > 50:
+                issues.append(f'Customer name too long ({len(customer_name)} chars, max 50)')
+            
+            # Check phone numbers
+            import re
+            phone_numbers = []
+            if address.phone:
+                phone_numbers.append(('primary', address.phone))
+            if hasattr(pill.user, 'phone') and pill.user.phone:
+                phone_numbers.append(('user_phone', pill.user.phone))
+            if hasattr(pill.user, 'phone2') and pill.user.phone2:
+                phone_numbers.append(('user_phone2', pill.user.phone2))
+            
+            for phone_type, phone in phone_numbers:
+                digits_only = re.sub(r'\D', '', str(phone)) if phone else ''
+                details[f'{phone_type}_phone'] = {
+                    'original': phone,
+                    'digits_only': digits_only,
+                    'length': len(digits_only),
+                    'valid_egyptian': len(digits_only) >= 10 and len(digits_only) <= 11 and (digits_only.startswith('01') or digits_only.startswith('201'))
+                }
+                if phone and len(digits_only) < 10:
+                    issues.append(f'{phone_type} phone too short ({digits_only})')
+                elif phone and len(digits_only) > 11:
+                    issues.append(f'{phone_type} phone too long ({digits_only})')
+            
+            # Check address
+            address_text = address.address or "Address not provided"
+            details['address'] = {
+                'value': address_text,
+                'length': len(address_text),
+                'contains_special_chars': bool(re.search(r'[^\w\s\-.,()[\]]+', address_text))
+            }
+            if len(address_text) > 100:
+                issues.append(f'Address too long ({len(address_text)} chars, max 100)')
+            
+            # Check city/government
+            city_info = {}
+            if address.government:
+                from products.models import GOVERNMENT_CHOICES
+                gov_dict = dict(GOVERNMENT_CHOICES)
+                government_name = gov_dict.get(address.government, "Unknown")
+                city_info['government'] = government_name
+                
+            if address.city:
+                city_info['city'] = address.city
+                
+            full_city = f"{city_info.get('government', '')} - {city_info.get('city', '')}" if city_info.get('government') and city_info.get('city') else city_info.get('government', city_info.get('city', 'Cairo'))
+            
+            details['city'] = {
+                'government': city_info.get('government', ''),
+                'city_part': city_info.get('city', ''),
+                'full_city': full_city,
+                'length': len(full_city),
+                'contains_special_chars': bool(re.search(r'[^\w\s\-.,()[\]]+', full_city))
+            }
+            
+            if len(full_city) > 80:
+                issues.append(f'City field too long ({len(full_city)} chars, max 80)')
+            
+            # Check customer ID
+            customer_id = f"USER-{pill.user.id}"
+            details['customerId'] = {
+                'value': customer_id,
+                'user_id': pill.user.id,
+                'length': len(customer_id)
+            }
+            
+            logger.info(f"📊 DIAGNOSIS RESULTS:")
+            logger.info(f"  - Issues found: {len(issues)}")
+            for issue in issues:
+                logger.warning(f"    ⚠️ {issue}")
+            
+            logger.info(f"  - Customer details: {json.dumps(details, indent=2, default=str)}")
+            
+            return {
+                'success': True,
+                'has_issues': len(issues) > 0,
+                'issues': issues,
+                'details': details
+            }
+            
+        except Exception as e:
+            logger.error(f"Error diagnosing customer data: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 # Global instance
 khazenly_service = KhazenlyService()

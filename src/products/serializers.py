@@ -7,7 +7,7 @@ from django.db.models import Sum
 from django.db import transaction
 from accounts.models import User
 from .models import (
-    BestProduct, Category, CouponDiscount, Discount, LovedProduct, PayRequest, PillAddress, PillGift,
+    BestProduct, Category, CartSettings, CouponDiscount, Discount, LovedProduct, PayRequest, PillAddress, PillGift,
     PillItem, PillStatusLog, PriceDropAlert, ProductDescription, Shipping,
     SpecialProduct, SpinWheelDiscount, SpinWheelResult, SpinWheelSettings, StockAlert,
     SubCategory, Brand, Product, ProductImage, ProductAvailability, Rating, Color, Pill, Subject, Teacher
@@ -1004,12 +1004,12 @@ class PillDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id','pill_number','tracking_number', 'user_name', 'user_username', 'user_phone','user_parent_phone' ,'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
-            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
+            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
         ]
         read_only_fields = [
             'id','pill_number', 'tracking_number','user_name', 'user_username', 'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
-            'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
+            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
         ]
 
     def get_user_name(self, obj):
@@ -1309,6 +1309,20 @@ class SpinWheelSettingsSerializer(serializers.ModelSerializer):
     def validate_daily_spin_limit(self, value):
         if value <= 0:
             raise serializers.ValidationError("Daily spin limit must be positive.")
+        return value
+
+
+class CartSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CartSettings
+        fields = ['max_items_in_cart', 'updated_at']
+        read_only_fields = ['updated_at']
+
+    def validate_max_items_in_cart(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Maximum cart items must be positive.")
+        if value > 50:
+            raise serializers.ValidationError("Maximum cart items cannot exceed 50.")
         return value
 
 

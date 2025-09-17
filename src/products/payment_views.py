@@ -12,6 +12,7 @@ from django.shortcuts import redirect
 from django.utils import timezone
 import json
 import logging
+import time
 
 from products.models import Pill
 from services.fawaterak_service import fawaterak_service
@@ -19,6 +20,30 @@ from services.shakeout_service import shakeout_service  # Add Shake-out service 
 from services.easypay_service import easypay_service  # Add EasyPay service import
 
 logger = logging.getLogger(__name__)
+
+def is_fawry_ref_error(fawry_ref):
+    """Check if fawry_ref contains an error"""
+    if not fawry_ref:
+        return True
+    
+    # Convert to string if it's not already
+    fawry_ref_str = str(fawry_ref)
+    
+    # Check if it contains error indicators
+    error_indicators = ['error', 'Error', 'ERROR', 'Invalid Merchant Code', 'statusCode', 'statusDescription']
+    
+    for indicator in error_indicators:
+        if indicator in fawry_ref_str:
+            return True
+    
+    # Check if it looks like a JSON error response
+    try:
+        if fawry_ref_str.startswith('{') and 'error' in fawry_ref_str.lower():
+            return True
+    except:
+        pass
+    
+    return False
 
 class CustomJWTAuthentication(JWTAuthentication):
     """Custom JWT authentication that checks both 'Authorization' and 'auth' headers"""
@@ -591,42 +616,90 @@ class CreatePaymentInvoiceView(APIView):
                         }
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                result = easypay_service.create_payment_invoice(pill)
+                # Try creating the invoice with retry logic for fawry_ref errors
+                max_retries = 2  # Initial attempt + 1 retry
+                retry_delay = 10  # 10 seconds
                 
-                if result['success']:
-                    # Extract invoice data from successful response
-                    invoice_uid = result['data'].get('invoice_uid', '')
-                    invoice_sequence = result['data'].get('invoice_sequence', '')
+                for attempt in range(max_retries):
+                    logger.info(f"EasyPay invoice creation attempt {attempt + 1} for pill {pill_id}")
                     
-                    # Safely extract fawry_ref from nested invoice_details
-                    invoice_details = result['data'].get('invoice_details', {})
-                    fawry_ref = invoice_details.get('fawry_ref', '')
-                    if fawry_ref:
-                        fawry_ref = str(fawry_ref)
+                    result = easypay_service.create_payment_invoice(pill)
                     
-                    # Log field values for debugging
-                    logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
-                    
-                    # Update pill fields
-                    pill.easypay_invoice_uid = invoice_uid
-                    pill.easypay_invoice_sequence = invoice_sequence
-                    pill.easypay_fawry_ref = fawry_ref
-                    pill.easypay_data = result['data']
-                    pill.easypay_created_at = timezone.now()
-                    pill.payment_gateway = 'easypay'
-                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+                    if result['success']:
+                        # Extract invoice data from successful response
+                        invoice_uid = result['data'].get('invoice_uid', '')
+                        invoice_sequence = result['data'].get('invoice_sequence', '')
+                        
+                        # Safely extract fawry_ref from nested invoice_details
+                        invoice_details = result['data'].get('invoice_details', {})
+                        fawry_ref = invoice_details.get('fawry_ref', '')
+                        if fawry_ref:
+                            fawry_ref = str(fawry_ref)
+                        
+                        # Log field values for debugging
+                        logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
+                        
+                        # Check if fawry_ref contains an error
+                        if is_fawry_ref_error(fawry_ref):
+                            logger.warning(f"EasyPay fawry_ref contains error on attempt {attempt + 1}: {fawry_ref}")
+                            
+                            if attempt < max_retries - 1:  # Not the last attempt
+                                logger.info(f"Waiting {retry_delay} seconds before retry...")
+                                time.sleep(retry_delay)
+                                continue  # Retry
+                            else:
+                                # Last attempt failed, return error
+                                logger.error(f"EasyPay fawry_ref still contains error after {max_retries} attempts")
+                                return Response({
+                                    'success': False,
+                                    'error': f'EasyPay invoice creation failed: Invalid Fawry reference after {max_retries} attempts',
+                                    'details': {
+                                        'fawry_ref_error': fawry_ref,
+                                        'attempts': max_retries
+                                    },
+                                    'payment_gateway': 'easypay'
+                                }, status=status.HTTP_400_BAD_REQUEST)
+                        
+                        # fawry_ref is valid, proceed with saving
+                        logger.info(f"EasyPay invoice created successfully with valid fawry_ref on attempt {attempt + 1}")
+                        
+                        # Update pill fields
+                        pill.easypay_invoice_uid = invoice_uid
+                        pill.easypay_invoice_sequence = invoice_sequence
+                        pill.easypay_fawry_ref = fawry_ref
+                        pill.easypay_data = result['data']
+                        pill.easypay_created_at = timezone.now()
+                        pill.payment_gateway = 'easypay'
+                        pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
 
-                    return Response({
-                        'success': True,
-                        'message': 'EasyPay invoice created successfully',
-                        'data': {
-                            'invoice_uid': result['data']['invoice_uid'],
-                            'invoice_sequence': result['data']['invoice_sequence'],
-                            'payment_url': result['data']['payment_url'],
-                            'amount': result['data']['amount'],
-                            'payment_gateway': 'easypay'
-                        }
-                    }, status=status.HTTP_201_CREATED)
+                        return Response({
+                            'success': True,
+                            'message': 'EasyPay invoice created successfully',
+                            'data': {
+                                'invoice_uid': result['data']['invoice_uid'],
+                                'invoice_sequence': result['data']['invoice_sequence'],
+                                'payment_url': result['data']['payment_url'],
+                                'amount': result['data']['amount'],
+                                'payment_gateway': 'easypay',
+                                'attempts': attempt + 1
+                            }
+                        }, status=status.HTTP_201_CREATED)
+                    else:
+                        # EasyPay service returned an error
+                        logger.error(f"EasyPay service error on attempt {attempt + 1}: {result['error']}")
+                        
+                        if attempt < max_retries - 1:  # Not the last attempt
+                            logger.info(f"Waiting {retry_delay} seconds before retry...")
+                            time.sleep(retry_delay)
+                            continue  # Retry
+                        else:
+                            # Last attempt failed, return the service error
+                            return Response({
+                                'success': False,
+                                'error': result['error'],
+                                'payment_gateway': 'easypay',
+                                'attempts': max_retries
+                            }, status=status.HTTP_400_BAD_REQUEST)
                 else:
                     return Response({
                         'success': False,

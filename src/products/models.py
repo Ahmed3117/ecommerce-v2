@@ -1040,10 +1040,34 @@ class Pill(models.Model):
         if hasattr(self, 'pilladdress'):
             try:
                 shipping = Shipping.objects.filter(government=self.pilladdress.government).first()
-                return shipping.shipping_price if shipping else 0.0
+                base_shipping = shipping.shipping_price if shipping else 0.0
+                # Add over tax amount to shipping
+                return base_shipping + self.calculate_over_tax_price()
             except:
                 return 0.0
         return 0.0
+
+    def calculate_over_tax_price(self):
+        """
+        Calculate the over-tax amount for items exceeding the maximum threshold.
+        Returns the total tax amount to be added to shipping.
+        """
+        # Get the active tax configuration
+        tax_config = OverTaxConfig.get_active_config()
+        if not tax_config:
+            return 0.0
+        
+        # Count total quantity of items in the pill
+        # total_quantity = sum(item.quantity for item in self.items.all())
+        total_quantity = self.items.count()
+        
+        # Calculate items that exceed the threshold
+        items_over_threshold = max(0, total_quantity - tax_config.max_products_without_tax)
+        
+        # Calculate tax amount
+        tax_amount = items_over_threshold * float(tax_config.tax_amount_per_item)
+        
+        return tax_amount
 
     def final_price(self):
         base_price = self.price_without_coupons_or_gifts()
@@ -1358,6 +1382,27 @@ class SpinWheelSettings(models.Model):
     def get_settings(cls):
         return cls.objects.first() or cls.objects.create()
 
+
+class CartSettings(models.Model):
+    max_items_in_cart = models.PositiveIntegerField(
+        default=5,
+        validators=[MinValueValidator(1), MaxValueValidator(50)],
+        help_text="Maximum number of different products that can be added to cart"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cart Settings"
+        verbose_name_plural = "Cart Settings"
+
+    def __str__(self):
+        return f"Max Cart Items: {self.max_items_in_cart}"
+
+    @classmethod
+    def get_settings(cls):
+        return cls.objects.first() or cls.objects.create()
+
+
 class PillGift(models.Model):
     discount_value = models.FloatField(
         validators=[MinValueValidator(0), MaxValueValidator(100)],
@@ -1577,6 +1622,49 @@ class KhazenlyWebhookLog(models.Model):
             # Log the error but don't raise it
             logger.error(f"Failed to create KhazenlyWebhookLog: {e}")
             return None
+
+
+class OverTaxConfig(models.Model):
+    """
+    Configuration model for over-tax calculation.
+    Defines the tax amount and maximum number of products before tax applies.
+    """
+    max_products_without_tax = models.PositiveIntegerField(
+        default=0,
+        help_text="Maximum number of products that won't be taxed. Tax applies to products beyond this number."
+    )
+    tax_amount_per_item = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)],
+        help_text="Tax amount to apply per item that exceeds the maximum threshold."
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this tax configuration is currently active."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Over Tax Configuration"
+        verbose_name_plural = "Over Tax Configurations"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Tax {self.tax_amount_per_item} EGP per item after {self.max_products_without_tax} products"
+
+    @classmethod
+    def get_active_config(cls):
+        """Get the currently active tax configuration."""
+        return cls.objects.filter(is_active=True).first()
+
+    def save(self, *args, **kwargs):
+        # Ensure only one active configuration exists
+        if self.is_active:
+            OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
+        super().save(*args, **kwargs)
 
 
 def prepare_whatsapp_message(phone_number, pill):
