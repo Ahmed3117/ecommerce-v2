@@ -17,28 +17,28 @@ GOVERNMENT_CHOICES = [
     ('1', 'Cairo'),
     ('2', 'Alexandria'),
     ('3', 'Kafr El Sheikh'),
-    ('4', 'Dakahlia'),
-    ('5', 'Sharqia'),
-    ('6', 'Gharbia'),
-    ('7', 'Monufia'),
+    ('4', 'Dakahleya'),  # Updated to match Khazenly
+    ('5', 'Sharkeya'),   # Updated to match Khazenly
+    ('6', 'Gharbeya'),   # Updated to match Khazenly
+    ('7', 'Monefeya'),   # Updated to match Khazenly
     ('8', 'Qalyubia'),
     ('9', 'Giza'),
-    ('10', 'Beni Suef'),
+    ('10', 'Bani-Sweif'),  # Updated to match Khazenly
     ('11', 'Fayoum'),
-    ('12', 'Minya'),
+    ('12', 'Menya'),       # Updated to match Khazenly
     ('13', 'Assiut'),
     ('14', 'Sohag'),
     ('15', 'Qena'),
     ('16', 'Luxor'),
     ('17', 'Aswan'),
     ('18', 'Red Sea'),
-    ('19', 'Beheira'),
+    ('19', 'Behera'),      # Updated to match Khazenly
     ('20', 'Ismailia'),
     ('21', 'Suez'),
-    ('22', 'Port Said'),
+    ('22', 'Port-Said'),   # Updated to match Khazenly
     ('23', 'Damietta'),
-    ('24', 'Matruh'),
-    ('25', 'New Valley'),
+    ('24', 'Marsa Matrouh'),  # Updated to match Khazenly
+    ('25', 'Al-Wadi Al-Gadid'),  # Updated to match Khazenly
     ('26', 'North Sinai'),
     ('27', 'South Sinai'),
 ]
@@ -537,6 +537,21 @@ class Pill(models.Model):
         help_text="Which payment gateway was used for this pill"
     )
     
+    # Stock problem tracking fields
+    has_stock_problem = models.BooleanField(
+        default=False,
+        help_text="Indicates if this pill has stock availability issues"
+    )
+    stock_problem_items = models.JSONField(
+        null=True, 
+        blank=True,
+        help_text="Details of items with stock problems (product_id, required_qty, available_qty, etc.)"
+    )
+    is_resolved = models.BooleanField(
+        default=False,
+        help_text="Indicates if the stock problem has been resolved"
+    )
+    
     def save(self, *args, **kwargs):
         if not self.pill_number:
             self.pill_number = generate_pill_number()
@@ -599,6 +614,10 @@ class Pill(models.Model):
         # Create Khazenly order if paid was just set to True
         if is_newly_paid:
             self._create_khazenly_order()
+        
+        # Check for stock problems if pill is paid and not already resolved
+        if self.paid and not self.is_resolved:
+            self._check_and_update_stock_problems()
 
     def _create_khazenly_order(self):
         """Create Khazenly order when paid becomes True"""
@@ -649,6 +668,51 @@ class Pill(models.Model):
             logger.error(f"Traceback: {traceback.format_exc()}")
             # Re-raise the exception so it can be caught by the admin view
             raise
+    
+    def _check_and_update_stock_problems(self):
+        """Check for stock problems and update pill status accordingly"""
+        try:
+            logger.info(f"Checking stock problems for paid pill {self.pill_number}")
+            
+            # Use the existing check_all_items_availability method
+            availability_check = self.check_all_items_availability()
+            
+            if not availability_check['all_available']:
+                # Stock problems found
+                logger.warning(f"Stock problems detected for paid pill {self.pill_number}: {availability_check['problem_items_count']} items")
+                
+                # Update stock problem fields without triggering save recursion
+                update_fields = {
+                    'has_stock_problem': True,
+                    'stock_problem_items': availability_check['problem_items'],
+                    'is_resolved': False
+                }
+                
+                # Update the model without triggering save again
+                Pill.objects.filter(pk=self.pk).update(**update_fields)
+                
+                logger.info(f"Updated pill {self.pill_number} with stock problem status")
+                
+            else:
+                # No stock problems, ensure flags are cleared if they were set before
+                if self.has_stock_problem:
+                    logger.info(f"Stock problems resolved for pill {self.pill_number}")
+                    
+                    update_fields = {
+                        'has_stock_problem': False,
+                        'stock_problem_items': None,
+                        'is_resolved': True
+                    }
+                    
+                    # Update the model without triggering save again
+                    Pill.objects.filter(pk=self.pk).update(**update_fields)
+                    
+                    logger.info(f"Cleared stock problem status for pill {self.pill_number}")
+                    
+        except Exception as e:
+            logger.error(f"Error checking stock problems for pill {self.pill_number}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
     
 
     @property
@@ -1110,6 +1174,114 @@ class Pill(models.Model):
         if not self.gift_discount:
             self.save()
         return None
+
+    def check_item_availability(self, pill_item):
+        """
+        Check if a specific pill item is available in stock
+        Returns: dict with availability info
+        """
+        try:
+            availability = pill_item.product.availabilities.filter(
+                size=pill_item.size,
+                color=pill_item.color
+            ).first()
+            
+            if not availability:
+                return {
+                    'available': False,
+                    'reason': 'no_availability_record',
+                    'available_quantity': 0,
+                    'required_quantity': pill_item.quantity
+                }
+            
+            if availability.quantity <= 0:
+                return {
+                    'available': False,
+                    'reason': 'out_of_stock',
+                    'available_quantity': 0,
+                    'required_quantity': pill_item.quantity
+                }
+            
+            if availability.quantity < pill_item.quantity:
+                return {
+                    'available': False,
+                    'reason': 'insufficient_quantity',
+                    'available_quantity': availability.quantity,
+                    'required_quantity': pill_item.quantity
+                }
+            
+            return {
+                'available': True,
+                'available_quantity': availability.quantity,
+                'required_quantity': pill_item.quantity
+            }
+            
+        except Exception as e:
+            return {
+                'available': False,
+                'reason': 'error',
+                'error': str(e),
+                'available_quantity': 0,
+                'required_quantity': pill_item.quantity
+            }
+
+    def check_all_items_availability(self):
+        """
+        Check availability for all items in this pill
+        Returns: dict with overall status and problem items details
+        """
+        problem_items = []
+        all_available = True
+        
+        for pill_item in self.items.all():
+            availability_check = self.check_item_availability(pill_item)
+            
+            if not availability_check['available']:
+                all_available = False
+                problem_items.append({
+                    'pill_item_id': pill_item.id,
+                    'product_id': pill_item.product.id,
+                    'product_name': pill_item.product.name,
+                    'size': pill_item.size,
+                    'color': pill_item.color.name if pill_item.color else None,
+                    'required_quantity': availability_check['required_quantity'],
+                    'available_quantity': availability_check['available_quantity'],
+                    'reason': availability_check['reason'],
+                    'error': availability_check.get('error')
+                })
+        
+        return {
+            'all_available': all_available,
+            'problem_items': problem_items,
+            'total_items': self.items.count(),
+            'problem_items_count': len(problem_items)
+        }
+
+    def update_stock_problem_status(self):
+        """
+        Update the stock problem status based on current availability
+        """
+        availability_check = self.check_all_items_availability()
+        
+        if not availability_check['all_available']:
+            self.has_stock_problem = True
+            self.stock_problem_items = availability_check['problem_items']
+            self.is_resolved = False
+        else:
+            # If previously had problems but now all items are available
+            if self.has_stock_problem:
+                self.has_stock_problem = False
+                self.stock_problem_items = None
+                self.is_resolved = True
+        
+        # Save without triggering the full save method to avoid recursion
+        Pill.objects.filter(pk=self.pk).update(
+            has_stock_problem=self.has_stock_problem,
+            stock_problem_items=self.stock_problem_items,
+            is_resolved=self.is_resolved
+        )
+        
+        return availability_check
 
     class Meta:
         verbose_name_plural = 'Bills'

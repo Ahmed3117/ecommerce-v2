@@ -199,17 +199,37 @@ class FinalPriceListFilter(admin.SimpleListFilter):
                 return queryset
         return queryset
 
+class StockProblemListFilter(admin.SimpleListFilter):
+    title = 'Stock Problem Status'
+    parameter_name = 'stock_problem'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('has_problem', 'Has Stock Problem'),
+            ('resolved', 'Resolved'),
+            ('no_problem', 'No Stock Problem'),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'has_problem':
+            return queryset.filter(has_stock_problem=True, is_resolved=False)
+        elif self.value() == 'resolved':
+            return queryset.filter(has_stock_problem=True, is_resolved=True)
+        elif self.value() == 'no_problem':
+            return queryset.filter(has_stock_problem=False)
+        return queryset
+
 @admin.register(Pill)
 class PillAdmin(admin.ModelAdmin):
     list_display = [
         'pill_number', 'easypay_invoice_sequence', 'easypay_invoice_uid', 'user', 'paid', 'status', 'is_shipped',
-        'khazenly_status', 'khazenly_actions', 'final_price_display', 'get_calculate_over_tax_price',
+        'khazenly_status', 'khazenly_actions', 'stock_problem_status', 'final_price_display', 'get_calculate_over_tax_price',
     ]
-    list_filter = ['status', 'paid', 'is_shipped', FinalPriceListFilter]
+    list_filter = ['status', 'paid', 'is_shipped', 'has_stock_problem', 'is_resolved', StockProblemListFilter, FinalPriceListFilter]
     search_fields = ['pill_number', 'user__username']
-    readonly_fields = ['pill_number']
+    readonly_fields = ['pill_number', 'stock_problem_items']
     list_editable = ['paid', 'status']
-    actions = ['send_to_khazenly_bulk', 'export_to_excel_for_khazenly']
+    actions = ['send_to_khazenly_bulk', 'export_to_excel_for_khazenly', 'mark_stock_problems_resolved', 'check_stock_problems']
 
     def final_price_display(self, obj):
         return obj.final_price()
@@ -228,6 +248,77 @@ class PillAdmin(admin.ModelAdmin):
         else:
             return format_html('<span style="color: gray;">-</span>')
     khazenly_status.short_description = 'Khazenly'
+
+    def stock_problem_status(self, obj):
+        """Display stock problem status with color coding"""
+        if obj.has_stock_problem:
+            if obj.is_resolved:
+                return format_html('<span style="color: #28a745; font-weight: bold;">✓ Resolved</span>')
+            else:
+                problem_count = len(obj.stock_problem_items) if obj.stock_problem_items else 0
+                return format_html(
+                    '<span style="color: #dc3545; font-weight: bold;">⚠ Problem ({} items)</span>',
+                    problem_count
+                )
+        else:
+            return format_html('<span style="color: #6c757d;">-</span>')
+    
+    stock_problem_status.short_description = 'Stock Status'
+    stock_problem_status.admin_order_field = 'has_stock_problem'
+
+    @admin.action(description='Mark selected pills as stock problems resolved')
+    def mark_stock_problems_resolved(self, request, queryset):
+        """Mark selected pills with stock problems as resolved"""
+        updated_count = 0
+        
+        for pill in queryset.filter(has_stock_problem=True, is_resolved=False):
+            # Check current stock availability
+            availability_check = pill.check_all_items_availability()
+            
+            if availability_check['all_available']:
+                # Stock is now available, mark as resolved
+                pill.is_resolved = True
+                pill.has_stock_problem = False
+                pill.stock_problem_items = None
+                pill.save(update_fields=['is_resolved', 'has_stock_problem', 'stock_problem_items'])
+                updated_count += 1
+            else:
+                # Still has stock problems, update the problem items
+                pill.stock_problem_items = availability_check['problem_items']
+                pill.save(update_fields=['stock_problem_items'])
+        
+        if updated_count > 0:
+            self.message_user(
+                request,
+                f'Successfully resolved stock problems for {updated_count} pills.',
+                level='SUCCESS'
+            )
+        else:
+            self.message_user(
+                request,
+                'No pills were resolved. Selected pills either still have stock problems or were already resolved.',
+                level='WARNING'
+            )
+
+    @admin.action(description='Check stock problems for selected pills')
+    def check_stock_problems(self, request, queryset):
+        """Manually check stock problems for selected pills"""
+        checked_count = 0
+        problems_found = 0
+        
+        for pill in queryset.filter(paid=True):
+            pill._check_and_update_stock_problems()
+            pill.refresh_from_db()
+            checked_count += 1
+            
+            if pill.has_stock_problem and not pill.is_resolved:
+                problems_found += 1
+        
+        self.message_user(
+            request,
+            f'Checked {checked_count} pills. Found {problems_found} pills with stock problems.',
+            level='INFO'
+        )
 
     @admin.display(description='Khazenly Actions')
     def khazenly_actions(self, obj):

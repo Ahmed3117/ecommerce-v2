@@ -228,39 +228,33 @@ class KhazenlyService:
             total_amount = total_product_price + shipping_fees - total_discount
             
             # FIXED: Customer data format based on Khazenly requirements
-            # Collect all available phone numbers without duplicates
-            phone_numbers = []
+            # Phone handling logic according to requirements:
+            # - tel should be the phone from the pilladdress
+            # - secondaryTel should be user.phone if exists, if not user.phone2 if exists, if not user.parent_phone
             
-            # Collect phone numbers from different sources
-            if address.phone:
-                phone_numbers.append(address.phone)
+            # Primary tel is always from pilladdress
+            primary_tel = address.phone if address.phone else ""
+            logger.info(f"🔍 Phone processing debug:")
+            logger.info(f"  - address.phone: '{getattr(address, 'phone', 'NOT_FOUND')}'")
+            logger.info(f"  - primary_tel: '{primary_tel}'")
+            
+            # Secondary tel priority: user.phone -> user.phone2 -> user.parent_phone
+            secondary_tel = ""
+            logger.info(f"  - user.phone: '{getattr(pill.user, 'phone', 'NOT_FOUND')}'")
+            logger.info(f"  - user.phone2: '{getattr(pill.user, 'phone2', 'NOT_FOUND')}'")
+            logger.info(f"  - user.parent_phone: '{getattr(pill.user, 'parent_phone', 'NOT_FOUND')}'")
+            
             if hasattr(pill.user, 'phone') and pill.user.phone:
-                phone_numbers.append(pill.user.phone)
-            if hasattr(pill.user, 'phone2') and pill.user.phone2:
-                phone_numbers.append(pill.user.phone2)
-            
-            # Remove duplicates while preserving order
-            unique_phones = []
-            for phone in phone_numbers:
-                if phone not in unique_phones:
-                    unique_phones.append(phone)
-            
-            # Set primary tel as address.phone (if available), otherwise use first unique phone
-            primary_tel = address.phone if address.phone else (unique_phones[0] if unique_phones else "")
-            
-            # For secondaryTel, get other unique phones excluding the primary tel
-            # secondary_phones = [phone for phone in unique_phones if phone != primary_tel]
-            # For secondaryTel, use the first unique phone if it's different from primary_tel,
-            # otherwise use the second unique phone if available
-            if unique_phones:
-                if unique_phones[0] != primary_tel:
-                    secondary_tel = unique_phones[0]
-                elif len(unique_phones) > 1:
-                    secondary_tel = unique_phones[1]
-                else:
-                    secondary_tel = ""
+                secondary_tel = pill.user.phone
+                logger.info(f"✅ Using user.phone as secondary: '{secondary_tel}'")
+            elif hasattr(pill.user, 'phone2') and pill.user.phone2:
+                secondary_tel = pill.user.phone2
+                logger.info(f"✅ Using user.phone2 as secondary: '{secondary_tel}'")
+            elif hasattr(pill.user, 'parent_phone') and pill.user.parent_phone:
+                secondary_tel = pill.user.parent_phone
+                logger.info(f"✅ Using user.parent_phone as secondary: '{secondary_tel}'")
             else:
-                secondary_tel = ""
+                logger.info("❌ No secondary phone found")
             
             # Validate and sanitize customer data
             def sanitize_text(text, max_length, field_name="field"):
@@ -307,40 +301,49 @@ class KhazenlyService:
                 
                 return digits_only
             
-            # Get proper city name from government choices
-            city_name = "Cairo"  # Default fallback
-            if hasattr(address, 'government') and address.government:
-                from products.models import GOVERNMENT_CHOICES
-                gov_dict = dict(GOVERNMENT_CHOICES)
-                government_name = gov_dict.get(address.government, "Cairo")
-                city_part = address.city if address.city else ""
-                if city_part:
-                    # Combine government and city, but ensure it doesn't exceed Khazenly's 80-character limit
-                    full_city = f"{government_name} - {city_part}"
-                    if len(full_city) > 80:
-                        # If too long, truncate the city part but keep the government name
-                        max_city_length = 80 - len(government_name) - 3  # 3 for " - "
-                        if max_city_length > 0:
-                            truncated_city = city_part[:max_city_length].strip()
-                            city_name = f"{government_name} - {truncated_city}"
-                            logger.warning(f"City field truncated from '{full_city}' to '{city_name}' for Khazenly (max 80 chars)")
-                        else:
-                            # If government name itself is too long, just use it
-                            city_name = government_name[:80]
-                            logger.warning(f"Using only government name '{city_name}' due to length constraints")
-                    else:
-                        city_name = full_city
-                else:
-                    city_name = government_name
-            elif address.city:
-                # Ensure even standalone city doesn't exceed 80 characters
+            # Get city and government separately for proper field mapping
+            # City should be the actual city from pilladdress, government should be the government name
+            city_name = ""
+            government_name = ""
+            
+            # Get city from pilladdress
+            logger.info(f"🔍 City processing debug:")
+            logger.info(f"  - address.city: '{getattr(address, 'city', 'NOT_FOUND')}' (type: {type(getattr(address, 'city', None))})")
+            logger.info(f"  - address.government: '{getattr(address, 'government', 'NOT_FOUND')}' (type: {type(getattr(address, 'government', None))})")
+            
+            if address.city:
                 city_name = address.city[:80] if len(address.city) > 80 else address.city
+                logger.info(f"✅ Using city from address: '{city_name}'")
                 if len(address.city) > 80:
                     logger.warning(f"City field truncated from '{address.city}' to '{city_name}' for Khazenly")
             
-            # Sanitize city name
+            # Get government name from government choices
+            if hasattr(address, 'government') and address.government:
+                from products.models import GOVERNMENT_CHOICES
+                gov_dict = dict(GOVERNMENT_CHOICES)
+                government_name = gov_dict.get(address.government, "")
+                logger.info(f"✅ Government found: '{government_name}' (code: {address.government})")
+            else:
+                logger.info("❌ No government found in address")
+            
+            # Fallback logic: if no city but has government, use government as city
+            if not city_name and government_name:
+                city_name = government_name
+                logger.info(f"🔄 Using government '{government_name}' as city since no city specified")
+            elif not city_name:
+                city_name = "Cairo"  # Default fallback
+                logger.warning("⚠️ No city or government found, using 'Cairo' as default")
+            
+            # Sanitize city and government names
+            original_city = city_name
             city_name = sanitize_text(city_name, 80, "city")
-            logger.info(f"Final city name for Khazenly: '{city_name}' (length: {len(city_name)})")
+            government_name = sanitize_text(government_name, 80, "government")
+            
+            logger.info(f"🔍 City sanitization:")
+            logger.info(f"  - Original city: '{original_city}'")
+            logger.info(f"  - Sanitized city: '{city_name}' (length: {len(city_name)})")
+            logger.info(f"  - City bytes: {city_name.encode('utf-8') if city_name else 'None'}")
+            logger.info(f"Final government for Khazenly: '{government_name}' (length: {len(government_name)})")
             
             # Build order data
             order_data = {
@@ -367,13 +370,16 @@ class KhazenlyService:
                 },
                 "Customer": {
                     "customerName": sanitize_text(address.name or f"Customer {pill.user.username}", 50, "customerName"),
-                    "tel": validate_phone(primary_tel),
-                    "secondaryTel": validate_phone(secondary_tel),
-                    "address1": sanitize_text(address.address or "Address not provided", 100, "address1"),
-                    "address2": "",
-                    "address3": "",
-                    "city": city_name,
-                    "country": "Egypt",
+                    "Tel": validate_phone(primary_tel),  # Fixed: Capital T for Tel
+                    "SecondaryTel": validate_phone(secondary_tel),  # Fixed: Capital S for SecondaryTel
+                    "Address1": sanitize_text(
+                        f"{address.address or 'Address not provided'}, {address.city or 'City not provided'}", 
+                        100, "address1"
+                    ),  # Merged address and city for complete address info
+                    "Address2": "",  # Fixed: Capital A for Address2
+                    "Address3": "",  # Fixed: Capital A for Address3
+                    "City": government_name,  
+                    "Country": "Egypt",  # Fixed: Capital C for Country
                     "customerId": f"USER-{pill.user.id}"  # Use prefixed customer ID format
                 },
                 "lineItems": line_items
@@ -383,22 +389,23 @@ class KhazenlyService:
             customer_data = order_data.get('Customer', {})
             logger.info(f"🔍 Customer data validation:")
             logger.info(f"  - customerName: '{customer_data.get('customerName')}' (len: {len(customer_data.get('customerName', ''))})")
-            logger.info(f"  - tel: '{customer_data.get('tel')}' (len: {len(customer_data.get('tel', ''))})")
-            logger.info(f"  - secondaryTel: '{customer_data.get('secondaryTel')}' (len: {len(customer_data.get('secondaryTel', ''))})")
-            logger.info(f"  - address1: '{customer_data.get('address1')}' (len: {len(customer_data.get('address1', ''))})")
-            logger.info(f"  - city: '{customer_data.get('city')}' (len: {len(customer_data.get('city', ''))})")
-            logger.info(f"  - customerId: '{customer_data.get('customerId')}'")
+            logger.info(f"  - Tel: '{customer_data.get('Tel')}' (len: {len(customer_data.get('Tel', ''))})")
+            logger.info(f"  - SecondaryTel: '{customer_data.get('SecondaryTel')}' (len: {len(customer_data.get('SecondaryTel', ''))})")
+            logger.info(f"  - Address1: '{customer_data.get('Address1')}' (len: {len(customer_data.get('Address1', ''))})")
+            logger.info(f"  - City: '{customer_data.get('City')}' (len: {len(customer_data.get('City', ''))})")
+            logger.info(f"  - Country: '{customer_data.get('Country')}' (len: {len(customer_data.get('Country', ''))})")
+            logger.info(f"  - customerId: '{customer_data.get('customerId')}')")
             
             # Validate required fields
             validation_errors = []
             if not customer_data.get('customerName'):
                 validation_errors.append("customerName is empty")
-            if not customer_data.get('tel'):
-                validation_errors.append("tel is empty")
-            if not customer_data.get('address1'):
-                validation_errors.append("address1 is empty")
-            if not customer_data.get('city'):
-                validation_errors.append("city is empty")
+            if not customer_data.get('Tel'):
+                validation_errors.append("Tel is empty")
+            if not customer_data.get('Address1'):
+                validation_errors.append("Address1 is empty")
+            if not customer_data.get('City'):
+                validation_errors.append("City is empty")
             if not customer_data.get('customerId'):
                 validation_errors.append("customerId is empty")
                 
@@ -682,3 +689,7 @@ class KhazenlyService:
 
 # Global instance
 khazenly_service = KhazenlyService()
+
+
+
+
