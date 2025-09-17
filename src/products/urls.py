@@ -109,6 +109,7 @@ urlpatterns = [
     path('dashboard/spin-wheel/', views.SpinWheelDiscountListCreateView.as_view(), name='spin-wheel-list-create'),
     path('dashboard/spin-wheel/<int:pk>/', views.SpinWheelDiscountRetrieveUpdateDestroyView.as_view(), name='spin-wheel-detail'),
     path('dashboard/spin-wheel-settings/', views.SpinWheelSettingsView.as_view(), name='spin-wheel-settings'),
+    path('dashboard/cart-settings/', views.CartSettingsView.as_view(), name='cart-settings'),
     path('dashboard/pill-gifts/', views.PillGiftListCreateView.as_view(), name='pill-gift-list-create'),
     path('dashboard/pill-gifts/<int:pk>/', views.PillGiftRetrieveUpdateDestroyView.as_view(), name='pill-gift-detail'),
 

@@ -270,6 +270,11 @@ class PillItemCreateView(generics.CreateAPIView):
         quantity = serializer.validated_data['quantity']
 
         with transaction.atomic():
+            # Get cart settings
+            from products.models import CartSettings
+            cart_settings = CartSettings.get_settings()
+            max_items = cart_settings.max_items_in_cart
+
             # Check for existing item with the exact same attributes
             existing_item = PillItem.objects.filter(
                 user=user,
@@ -299,6 +304,17 @@ class PillItemCreateView(generics.CreateAPIView):
                 existing_item.save()
                 serializer.instance = existing_item
             else:
+                # Check cart item limit for new items
+                current_cart_count = PillItem.objects.filter(
+                    user=user,
+                    status__isnull=True
+                ).count()
+                
+                if current_cart_count >= max_items:
+                    raise serializers.ValidationError({
+                        'non_field_errors': [f'لا يمكنك اضافة اكثر من {max_items} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات']
+                    })
+                
                 # Create new item
                 serializer.save(user=user, status=None)
 
@@ -1343,6 +1359,30 @@ class SpinWheelSettingsView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CartSettingsView(APIView):
+    # permission_classes = [IsAdminOrHasEndpointPermission]
+
+    def get(self, request):
+        """Get current cart settings"""
+        from products.models import CartSettings
+        settings = CartSettings.get_settings()
+        from products.serializers import CartSettingsSerializer
+        serializer = CartSettingsSerializer(settings)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        """Update cart settings"""
+        from products.models import CartSettings
+        from products.serializers import CartSettingsSerializer
+        settings = CartSettings.get_settings()
+        serializer = CartSettingsSerializer(settings, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class PillGiftListCreateView(generics.ListCreateAPIView):
     queryset = PillGift.objects.all()

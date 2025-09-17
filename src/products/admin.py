@@ -8,7 +8,8 @@ from .models import (
     Color, ProductAvailability, Shipping, PillItem, Pill, PillAddress,
     PillStatusLog, CouponDiscount, Rating, Discount, PayRequest, LovedProduct,
     StockAlert, PriceDropAlert, SpecialProduct, SpinWheelDiscount,
-    SpinWheelResult, SpinWheelSettings, PillGift, KhazenlyWebhookLog
+    SpinWheelResult, SpinWheelSettings, CartSettings, PillGift, KhazenlyWebhookLog,
+    OverTaxConfig
 )
 
 import json
@@ -202,7 +203,7 @@ class FinalPriceListFilter(admin.SimpleListFilter):
 class PillAdmin(admin.ModelAdmin):
     list_display = [
         'pill_number', 'easypay_invoice_sequence', 'easypay_invoice_uid', 'user', 'paid', 'status', 'is_shipped',
-        'khazenly_status', 'khazenly_actions', 'final_price_display'
+        'khazenly_status', 'khazenly_actions', 'final_price_display', 'get_calculate_over_tax_price',
     ]
     list_filter = ['status', 'paid', 'is_shipped', FinalPriceListFilter]
     search_fields = ['pill_number', 'user__username']
@@ -212,8 +213,12 @@ class PillAdmin(admin.ModelAdmin):
 
     def final_price_display(self, obj):
         return obj.final_price()
+    def get_calculate_over_tax_price(self, obj):
+        return obj.calculate_over_tax_price()
     final_price_display.short_description = 'Final Price'
+    get_calculate_over_tax_price.short_description = 'Over Tax Price'
     final_price_display.admin_order_field = None
+    get_calculate_over_tax_price.admin_order_field = None
 
     def khazenly_status(self, obj):
         if obj.has_khazenly_order:
@@ -925,6 +930,34 @@ admin.site.register(PillStatusLog)
 admin.site.register(PriceDropAlert)
 admin.site.register(SpinWheelResult)
 admin.site.register(SpinWheelSettings)
+admin.site.register(CartSettings)
+
+
+@admin.register(OverTaxConfig)
+class OverTaxConfigAdmin(admin.ModelAdmin):
+    list_display = ['__str__', 'max_products_without_tax', 'tax_amount_per_item', 'is_active', 'created_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['max_products_without_tax', 'tax_amount_per_item']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Tax Configuration', {
+            'fields': ('max_products_without_tax', 'tax_amount_per_item', 'is_active')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).order_by('-created_at')
+    
+    def save_model(self, request, obj, form, change):
+        # Ensure only one active configuration
+        if obj.is_active:
+            OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
+        super().save_model(request, obj, form, change)
 
 
 
