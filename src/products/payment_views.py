@@ -405,47 +405,123 @@ class CreateShakeoutInvoiceView(APIView):
             
             logger.info(f"Pill address found: {pill.pilladdress.name}, phone: {pill.pilladdress.phone}")
             
-            # Create Shake-out invoice using the service directly to get detailed error info
-            logger.info(f"Calling shakeout_service.create_payment_invoice() for pill {pill_id}")
-            result = shakeout_service.create_payment_invoice(pill)
-            logger.info(f"shakeout_service.create_payment_invoice returned: {result}")
+            # Check stock availability before creating invoice
+            logger.info(f"Checking stock availability for pill {pill_id}")
+            availability_check = pill.check_all_items_availability()
             
-            if result['success']:
-                # Update pill with invoice data from successful response
-                pill.shakeout_invoice_id = result['data']['invoice_id']
-                pill.shakeout_invoice_ref = result['data']['invoice_ref']
-                pill.shakeout_data = result['data']
-                pill.shakeout_created_at = timezone.now()
-                pill.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at'])
+            if not availability_check['all_available']:
+                logger.warning(f"Stock problems found for pill {pill_id}: {availability_check['problem_items_count']} items")
                 
-                logger.info(f"Successfully created Shake-out invoice for pill {pill_id}")
+                # Create detailed error message for each problem item
+                problem_details = []
+                for item in availability_check['problem_items']:
+                    if item['reason'] == 'out_of_stock':
+                        problem_details.append(f"{item['product_name']} غير متاح حالياً")
+                    elif item['reason'] == 'insufficient_quantity':
+                        problem_details.append(f"{item['product_name']} متاح فقط {item['available_quantity']} قطعة من أصل {item['required_quantity']} مطلوبة")
+                    else:
+                        problem_details.append(f"{item['product_name']} غير متاح")
+                
                 return Response({
-                    'success': True,
-                    'message': result.get('message', 'Shake-out invoice created successfully'),
-                    'data': {
-                        'invoice_id': result['data']['invoice_id'],
-                        'invoice_ref': result['data']['invoice_ref'],
-                        'payment_url': result['data']['url'],
-                        'total_amount': result['data']['total_amount'],
-                        'pill_number': pill.pill_number,
-                        'currency': result['data']['currency']
-                    }
-                }, status=status.HTTP_201_CREATED)
-            else:
-                # Return the actual error from Shake-out service
-                logger.error(f"Shake-out service error for pill {pill_id}: {result['error']}")
-                
-                response_data = {
                     'success': False,
-                    'error': result['error'],
-                    'pill_number': pill.pill_number
-                }
+                    'error_code': 'STOCK_UNAVAILABLE',
+                    'error': 'هذا المنتج لم يعد متاحا الان , يمكنك حذفه من الفاتورة والاستكمال بباقى المنتجات او الذهاب للصفحة الرئيسية لانشاء فاتورة جديدة',
+                    'details': {
+                        'problem_items': availability_check['problem_items'],
+                        'problem_details': problem_details,
+                        'total_items': availability_check['total_items'],
+                        'problem_items_count': availability_check['problem_items_count']
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"All items available for pill {pill_id}, proceeding with Shake-out invoice creation")
+            
+            # Try creating the invoice with retry logic for fawry_ref errors
+            max_retries = 2  # Initial attempt + 1 retry
+            retry_delay = 10  # 10 seconds
+            
+            for attempt in range(max_retries):
+                logger.info(f"Shake-out invoice creation attempt {attempt + 1} for pill {pill_id}")
                 
-                # Include additional data if available (like existing invoice info)
-                if result.get('data'):
-                    response_data['data'] = result['data']
+                result = shakeout_service.create_payment_invoice(pill)
+                logger.info(f"shakeout_service.create_payment_invoice returned: {result}")
                 
-                return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+                if result['success']:
+                    # Extract invoice data from successful response
+                    invoice_id = result['data'].get('invoice_id', '')
+                    invoice_ref = result['data'].get('invoice_ref', '')
+                    
+                    # Check if there's a fawry_ref in the response that might contain an error
+                    fawry_ref = result['data'].get('fawry_ref', '')
+                    if fawry_ref:
+                        fawry_ref = str(fawry_ref)
+                        
+                        # Check if fawry_ref contains an error
+                        if is_fawry_ref_error(fawry_ref):
+                            logger.warning(f"Shake-out fawry_ref contains error on attempt {attempt + 1}: {fawry_ref}")
+                            
+                            if attempt < max_retries - 1:  # Not the last attempt
+                                logger.info(f"Waiting {retry_delay} seconds before retry...")
+                                time.sleep(retry_delay)
+                                continue  # Retry
+                            else:
+                                # Last attempt failed, return error
+                                logger.error(f"Shake-out fawry_ref still contains error after {max_retries} attempts")
+                                return Response({
+                                    'success': False,
+                                    'error': f'Shake-out invoice creation failed: Invalid Fawry reference after {max_retries} attempts',
+                                    'details': {
+                                        'fawry_ref_error': fawry_ref,
+                                        'attempts': max_retries
+                                    },
+                                    'pill_number': pill.pill_number
+                                }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Invoice created successfully, proceed with saving
+                    logger.info(f"Shake-out invoice created successfully on attempt {attempt + 1}")
+                    
+                    # Update pill with invoice data from successful response
+                    pill.shakeout_invoice_id = result['data']['invoice_id']
+                    pill.shakeout_invoice_ref = result['data']['invoice_ref']
+                    pill.shakeout_data = result['data']
+                    pill.shakeout_created_at = timezone.now()
+                    pill.save(update_fields=['shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_data', 'shakeout_created_at'])
+                    
+                    return Response({
+                        'success': True,
+                        'message': result.get('message', 'Shake-out invoice created successfully'),
+                        'data': {
+                            'invoice_id': result['data']['invoice_id'],
+                            'invoice_ref': result['data']['invoice_ref'],
+                            'payment_url': result['data']['url'],
+                            'total_amount': result['data']['total_amount'],
+                            'pill_number': pill.pill_number,
+                            'currency': result['data']['currency'],
+                            'attempts': attempt + 1
+                        }
+                    }, status=status.HTTP_201_CREATED)
+                else:
+                    # Shake-out service returned an error
+                    logger.error(f"Shake-out service error on attempt {attempt + 1}: {result['error']}")
+                    
+                    if attempt < max_retries - 1:  # Not the last attempt
+                        logger.info(f"Waiting {retry_delay} seconds before retry...")
+                        time.sleep(retry_delay)
+                        continue  # Retry
+                    else:
+                        # Last attempt failed, return the service error
+                        response_data = {
+                            'success': False,
+                            'error': result['error'],
+                            'pill_number': pill.pill_number,
+                            'attempts': max_retries
+                        }
+                        
+                        # Include additional data if available (like existing invoice info)
+                        if result.get('data'):
+                            response_data['data'] = result['data']
+                        
+                        return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
                 
         except Exception as e:
             logger.error(f"Exception creating Shake-out invoice for pill {pill_id}: {str(e)}")
@@ -514,62 +590,129 @@ class CreateEasyPayInvoiceView(APIView):
             
             logger.info(f"Pill address found: {pill.pilladdress.name}, phone: {pill.pilladdress.phone}")
             
-            # Create EasyPay invoice using the service directly to get detailed error info
-            logger.info(f"Calling easypay_service.create_payment_invoice() for pill {pill_id}")
-            result = easypay_service.create_payment_invoice(pill)
-            logger.info(f"easypay_service.create_payment_invoice returned: {result}")
+            # Check stock availability before creating invoice
+            logger.info(f"Checking stock availability for pill {pill_id}")
+            availability_check = pill.check_all_items_availability()
             
-            if result['success']:
-                # Update pill with invoice data from successful response
-                invoice_uid = result['data'].get('invoice_uid', '')
-                invoice_sequence = result['data'].get('invoice_sequence', '')
+            if not availability_check['all_available']:
+                logger.warning(f"Stock problems found for pill {pill_id}: {availability_check['problem_items_count']} items")
                 
-                # Safely extract fawry_ref from nested invoice_details
-                invoice_details = result['data'].get('invoice_details', {})
-                fawry_ref = invoice_details.get('fawry_ref', '')
-                if fawry_ref:
-                    fawry_ref = str(fawry_ref)
+                # Create detailed error message for each problem item
+                problem_details = []
+                for item in availability_check['problem_items']:
+                    if item['reason'] == 'out_of_stock':
+                        problem_details.append(f"{item['product_name']} غير متاح حالياً")
+                    elif item['reason'] == 'insufficient_quantity':
+                        problem_details.append(f"{item['product_name']} متاح فقط {item['available_quantity']} قطعة من أصل {item['required_quantity']} مطلوبة")
+                    else:
+                        problem_details.append(f"{item['product_name']} غير متاح")
                 
-                # Log field values for debugging
-                logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
-                
-                # Update pill fields
-                pill.easypay_invoice_uid = invoice_uid
-                pill.easypay_invoice_sequence = invoice_sequence
-                pill.easypay_fawry_ref = fawry_ref
-                pill.easypay_data = result['data']
-                pill.easypay_created_at = timezone.now()
-                pill.payment_gateway = 'easypay'
-                pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
-                
-                logger.info(f"Successfully created EasyPay invoice for pill {pill_id}")
                 return Response({
-                    'success': True,
-                    'message': 'EasyPay invoice created successfully',
-                    'data': {
-                        'invoice_uid': result['data']['invoice_uid'],
-                        'invoice_sequence': result['data']['invoice_sequence'],
-                        'payment_url': result['data']['payment_url'],
-                        'amount': result['data']['amount'],
-                        'pill_number': pill.pill_number,
-                        'payment_method': result['data'].get('payment_method', 'fawry')
-                    }
-                }, status=status.HTTP_201_CREATED)
-            else:
-                # Return the actual error from EasyPay service
-                logger.error(f"EasyPay service error for pill {pill_id}: {result['error']}")
-                
-                response_data = {
                     'success': False,
-                    'error': result['error'],
-                    'pill_number': pill.pill_number
-                }
+                    'error_code': 'STOCK_UNAVAILABLE',
+                    'error': 'هذا المنتج لم يعد متاحا الان , يمكنك حذفه من الفاتورة والاستكمال بباقى المنتجات او الذهاب للصفحة الرئيسية لانشاء فاتورة جديدة',
+                    'details': {
+                        'problem_items': availability_check['problem_items'],
+                        'problem_details': problem_details,
+                        'total_items': availability_check['total_items'],
+                        'problem_items_count': availability_check['problem_items_count']
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"All items available for pill {pill_id}, proceeding with EasyPay invoice creation")
+            
+            # Try creating the invoice with retry logic for fawry_ref errors
+            max_retries = 2  # Initial attempt + 1 retry
+            retry_delay = 10  # 10 seconds
+            
+            for attempt in range(max_retries):
+                logger.info(f"EasyPay invoice creation attempt {attempt + 1} for pill {pill_id}")
                 
-                # Include additional data if available (like existing invoice info)
-                if result.get('data'):
-                    response_data['data'] = result['data']
+                result = easypay_service.create_payment_invoice(pill)
+                logger.info(f"easypay_service.create_payment_invoice returned: {result}")
                 
-                return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+                if result['success']:
+                    # Extract invoice data from successful response
+                    invoice_uid = result['data'].get('invoice_uid', '')
+                    invoice_sequence = result['data'].get('invoice_sequence', '')
+                    
+                    # Safely extract fawry_ref from nested invoice_details
+                    invoice_details = result['data'].get('invoice_details', {})
+                    fawry_ref = invoice_details.get('fawry_ref', '')
+                    if fawry_ref:
+                        fawry_ref = str(fawry_ref)
+                    
+                    # Log field values for debugging
+                    logger.info(f"EasyPay fields - UID: {invoice_uid}, Sequence: {invoice_sequence}, Fawry: {fawry_ref}")
+                    
+                    # Check if fawry_ref contains an error
+                    if is_fawry_ref_error(fawry_ref):
+                        logger.warning(f"EasyPay fawry_ref contains error on attempt {attempt + 1}: {fawry_ref}")
+                        
+                        if attempt < max_retries - 1:  # Not the last attempt
+                            logger.info(f"Waiting {retry_delay} seconds before retry...")
+                            time.sleep(retry_delay)
+                            continue  # Retry
+                        else:
+                            # Last attempt failed, return error
+                            logger.error(f"EasyPay fawry_ref still contains error after {max_retries} attempts")
+                            return Response({
+                                'success': False,
+                                'error': f'EasyPay invoice creation failed: Invalid Fawry reference after {max_retries} attempts',
+                                'details': {
+                                    'fawry_ref_error': fawry_ref,
+                                    'attempts': max_retries
+                                },
+                                'pill_number': pill.pill_number
+                            }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # fawry_ref is valid, proceed with saving
+                    logger.info(f"EasyPay invoice created successfully with valid fawry_ref on attempt {attempt + 1}")
+                    
+                    # Update pill fields
+                    pill.easypay_invoice_uid = invoice_uid
+                    pill.easypay_invoice_sequence = invoice_sequence
+                    pill.easypay_fawry_ref = fawry_ref
+                    pill.easypay_data = result['data']
+                    pill.easypay_created_at = timezone.now()
+                    pill.payment_gateway = 'easypay'
+                    pill.save(update_fields=['easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_fawry_ref', 'easypay_data', 'easypay_created_at', 'payment_gateway'])
+
+                    return Response({
+                        'success': True,
+                        'message': 'EasyPay invoice created successfully',
+                        'data': {
+                            'invoice_uid': result['data']['invoice_uid'],
+                            'invoice_sequence': result['data']['invoice_sequence'],
+                            'payment_url': result['data']['payment_url'],
+                            'amount': result['data']['amount'],
+                            'pill_number': pill.pill_number,
+                            'payment_method': result['data'].get('payment_method', 'fawry'),
+                            'attempts': attempt + 1
+                        }
+                    }, status=status.HTTP_201_CREATED)
+                else:
+                    # EasyPay service returned an error
+                    logger.error(f"EasyPay service error on attempt {attempt + 1}: {result['error']}")
+                    
+                    if attempt < max_retries - 1:  # Not the last attempt
+                        logger.info(f"Waiting {retry_delay} seconds before retry...")
+                        time.sleep(retry_delay)
+                        continue  # Retry
+                    else:
+                        # Last attempt failed, return the service error
+                        response_data = {
+                            'success': False,
+                            'error': result['error'],
+                            'pill_number': pill.pill_number,
+                            'attempts': max_retries
+                        }
+                        
+                        # Include additional data if available (like existing invoice info)
+                        if result.get('data'):
+                            response_data['data'] = result['data']
+                        
+                        return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
                 
         except Exception as e:
             logger.error(f"Exception creating EasyPay invoice for pill {pill_id}: {str(e)}")
@@ -595,6 +738,37 @@ class CreatePaymentInvoiceView(APIView):
             
             pill = get_object_or_404(Pill, id=pill_id, user=request.user)
             logger.info(f"Pill found: {pill.pill_number}")
+            
+            # Check stock availability before creating invoice
+            logger.info(f"Checking stock availability for pill {pill_id}")
+            availability_check = pill.check_all_items_availability()
+            
+            if not availability_check['all_available']:
+                logger.warning(f"Stock problems found for pill {pill_id}: {availability_check['problem_items_count']} items")
+                
+                # Create detailed error message for each problem item
+                problem_details = []
+                for item in availability_check['problem_items']:
+                    if item['reason'] == 'out_of_stock':
+                        problem_details.append(f"{item['product_name']} غير متاح حالياً")
+                    elif item['reason'] == 'insufficient_quantity':
+                        problem_details.append(f"{item['product_name']} متاح فقط {item['available_quantity']} قطعة من أصل {item['required_quantity']} مطلوبة")
+                    else:
+                        problem_details.append(f"{item['product_name']} غير متاح")
+                
+                return Response({
+                    'success': False,
+                    'error_code': 'STOCK_UNAVAILABLE',
+                    'error': 'هذا المنتج لم يعد متاحا الان , يمكنك حذفه من الفاتورة والاستكمال بباقى المنتجات او الذهاب للصفحة الرئيسية لانشاء فاتورة جديدة',
+                    'details': {
+                        'problem_items': availability_check['problem_items'],
+                        'problem_details': problem_details,
+                        'total_items': availability_check['total_items'],
+                        'problem_items_count': availability_check['problem_items_count']
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"All items available for pill {pill_id}, proceeding with invoice creation")
             
             # Get active payment method from settings
             active_method = getattr(settings, 'ACTIVE_PAYMENT_METHOD', 'shakeout').lower()
@@ -834,6 +1008,90 @@ class CheckEasyPayInvoiceStatusView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class RemovePillItemView(APIView):
+    """
+    API endpoint to remove an item from a pill
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, pill_id, item_id):
+        """
+        Remove a specific item from a pill
+        """
+        try:
+            # Get the pill and ensure it belongs to the authenticated user
+            pill = get_object_or_404(Pill, id=pill_id, user=request.user)
+            
+            # Check if pill is already paid
+            if pill.paid:
+                return Response({
+                    'success': False,
+                    'error': 'لا يمكن حذف عناصر من فاتورة مدفوعة',
+                    'error_code': 'PILL_ALREADY_PAID'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Get the pill item to remove
+            try:
+                pill_item = pill.items.get(id=item_id)
+            except pill.items.model.DoesNotExist:
+                return Response({
+                    'success': False,
+                    'error': 'العنصر غير موجود في هذه الفاتورة',
+                    'error_code': 'ITEM_NOT_FOUND'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Store item info for response
+            removed_item_info = {
+                'id': pill_item.id,
+                'product_name': pill_item.product.name,
+                'quantity': pill_item.quantity,
+                'price': float(pill_item.price)
+            }
+            
+            # Remove the item
+            pill_item.delete()
+            
+            # Check if pill has any items left
+            remaining_items_count = pill.items.count()
+            
+            if remaining_items_count == 0:
+                # If no items left, delete the pill
+                pill.delete()
+                return Response({
+                    'success': True,
+                    'message': 'تم حذف العنصر والفاتورة بالكامل لعدم وجود عناصر أخرى',
+                    'pill_deleted': True,
+                    'removed_item': removed_item_info
+                }, status=status.HTTP_200_OK)
+            
+            # Recalculate pill totals
+            pill.save()  # This will trigger recalculation in the save method
+            
+            return Response({
+                'success': True,
+                'message': 'تم حذف العنصر بنجاح',
+                'pill_deleted': False,
+                'removed_item': removed_item_info,
+                'remaining_items_count': remaining_items_count,
+                'updated_pill': {
+                    'id': pill.id,
+                    'pill_number': pill.pill_number,
+                    'total_amount': float(pill.final_price()),
+                    'items_count': remaining_items_count
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Exception removing item {item_id} from pill {pill_id}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'success': False,
+                'error': f'خطأ في الخادم: {str(e)}',
+                'error_code': 'SERVER_ERROR'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 # Instantiate the new views
 create_easypay_invoice_view = CreateEasyPayInvoiceView.as_view()
 create_payment_invoice_view = CreatePaymentInvoiceView.as_view()
@@ -842,3 +1100,4 @@ payment_failed_view = PaymentFailedView.as_view()
 payment_pending_view = PaymentPendingView.as_view()
 check_payment_status_view = CheckPaymentStatusView.as_view()
 check_easypay_invoice_status_view = CheckEasyPayInvoiceStatusView.as_view()
+remove_pill_item_view = RemovePillItemView.as_view()
