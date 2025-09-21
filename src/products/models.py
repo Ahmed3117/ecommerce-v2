@@ -17,28 +17,28 @@ GOVERNMENT_CHOICES = [
     ('1', 'Cairo'),
     ('2', 'Alexandria'),
     ('3', 'Kafr El Sheikh'),
-    ('4', 'Dakahleya'),  # Updated to match Khazenly
-    ('5', 'Sharkeya'),   # Updated to match Khazenly
-    ('6', 'Gharbeya'),   # Updated to match Khazenly
-    ('7', 'Monefeya'),   # Updated to match Khazenly
+    ('4', 'Dakahleya'),
+    ('5', 'Sharkeya'),
+    ('6', 'Gharbeya'),
+    ('7', 'Monefeya'),
     ('8', 'Qalyubia'),
     ('9', 'Giza'),
-    ('10', 'Bani-Sweif'),  # Updated to match Khazenly
+    ('10', 'Bani-Sweif'),
     ('11', 'Fayoum'),
-    ('12', 'Menya'),       # Updated to match Khazenly
+    ('12', 'Menya'),
     ('13', 'Assiut'),
     ('14', 'Sohag'),
     ('15', 'Qena'),
     ('16', 'Luxor'),
     ('17', 'Aswan'),
     ('18', 'Red Sea'),
-    ('19', 'Behera'),      # Updated to match Khazenly
+    ('19', 'Behera'),
     ('20', 'Ismailia'),
     ('21', 'Suez'),
-    ('22', 'Port-Said'),   # Updated to match Khazenly
+    ('22', 'Port-Said'),
     ('23', 'Damietta'),
-    ('24', 'Marsa Matrouh'),  # Updated to match Khazenly
-    ('25', 'Al-Wadi Al-Gadid'),  # Updated to match Khazenly
+    ('24', 'Marsa Matrouh'),
+    ('25', 'Al-Wadi Al-Gadid'),
     ('26', 'North Sinai'),
     ('27', 'South Sinai'),
 ]

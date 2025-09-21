@@ -1008,89 +1008,6 @@ class CheckEasyPayInvoiceStatusView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class RemovePillItemView(APIView):
-    """
-    API endpoint to remove an item from a pill
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def delete(self, request, pill_id, item_id):
-        """
-        Remove a specific item from a pill
-        """
-        try:
-            # Get the pill and ensure it belongs to the authenticated user
-            pill = get_object_or_404(Pill, id=pill_id, user=request.user)
-            
-            # Check if pill is already paid
-            if pill.paid:
-                return Response({
-                    'success': False,
-                    'error': 'لا يمكن حذف عناصر من فاتورة مدفوعة',
-                    'error_code': 'PILL_ALREADY_PAID'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Get the pill item to remove
-            try:
-                pill_item = pill.items.get(id=item_id)
-            except pill.items.model.DoesNotExist:
-                return Response({
-                    'success': False,
-                    'error': 'العنصر غير موجود في هذه الفاتورة',
-                    'error_code': 'ITEM_NOT_FOUND'
-                }, status=status.HTTP_404_NOT_FOUND)
-            
-            # Store item info for response
-            removed_item_info = {
-                'id': pill_item.id,
-                'product_name': pill_item.product.name,
-                'quantity': pill_item.quantity,
-                'price': float(pill_item.price)
-            }
-            
-            # Remove the item
-            pill_item.delete()
-            
-            # Check if pill has any items left
-            remaining_items_count = pill.items.count()
-            
-            if remaining_items_count == 0:
-                # If no items left, delete the pill
-                pill.delete()
-                return Response({
-                    'success': True,
-                    'message': 'تم حذف العنصر والفاتورة بالكامل لعدم وجود عناصر أخرى',
-                    'pill_deleted': True,
-                    'removed_item': removed_item_info
-                }, status=status.HTTP_200_OK)
-            
-            # Recalculate pill totals
-            pill.save()  # This will trigger recalculation in the save method
-            
-            return Response({
-                'success': True,
-                'message': 'تم حذف العنصر بنجاح',
-                'pill_deleted': False,
-                'removed_item': removed_item_info,
-                'remaining_items_count': remaining_items_count,
-                'updated_pill': {
-                    'id': pill.id,
-                    'pill_number': pill.pill_number,
-                    'total_amount': float(pill.final_price()),
-                    'items_count': remaining_items_count
-                }
-            }, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            logger.error(f"Exception removing item {item_id} from pill {pill_id}: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return Response({
-                'success': False,
-                'error': f'خطأ في الخادم: {str(e)}',
-                'error_code': 'SERVER_ERROR'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 # Instantiate the new views
 create_easypay_invoice_view = CreateEasyPayInvoiceView.as_view()
@@ -1100,4 +1017,3 @@ payment_failed_view = PaymentFailedView.as_view()
 payment_pending_view = PaymentPendingView.as_view()
 check_payment_status_view = CheckPaymentStatusView.as_view()
 check_easypay_invoice_status_view = CheckEasyPayInvoiceStatusView.as_view()
-remove_pill_item_view = RemovePillItemView.as_view()
