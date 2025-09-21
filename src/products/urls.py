@@ -87,6 +87,7 @@ urlpatterns = [
     # PillItems endpoints
     path('dashboard/pill-items/', views.PillItemListCreateView.as_view(), name='pillitem-list'),
     path('dashboard/pill-items/<int:pk>/', views.PillItemRetrieveUpdateDestroyView.as_view(), name='pillitem-detail'),
+    path('pills/<int:pill_id>/items/<int:item_id>/remove/', views.RemovePillItemView.as_view(), name='remove-pill-item'),
     
     # LovedItems endpoints
     path('dashboard/loved-items/', views.LovedProductListCreateView.as_view(), name='lovedproduct-list'),
