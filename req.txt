@@ -22,4 +22,4 @@ ua-parser
 ua-parser-builtins
 urllib3
 user-agents
-
+xlsxwriter
