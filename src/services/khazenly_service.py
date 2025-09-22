@@ -142,15 +142,19 @@ class KhazenlyService:
             if primary_tel:
                 if len(primary_tel) > 20:
                     issues.append(f"Primary phone number too long: {len(primary_tel)} chars (max 20)")
-                if not primary_tel.startswith('20') or len(primary_tel) != 11:
-                    issues.append(f"Primary phone must be in +20 format (11 digits starting with 20). Got: {primary_tel}")
+                # Only check if phone starts with valid Egyptian mobile prefixes
+                if not (primary_tel.startswith('010') or primary_tel.startswith('011') or 
+                       primary_tel.startswith('012') or primary_tel.startswith('015')):
+                    issues.append(f"Primary phone must start with 010, 011, 012, or 015. Got: {primary_tel}")
             
             secondary_tel = customer.get('SecondaryTel', '')
             if secondary_tel and secondary_tel != '':
                 if len(secondary_tel) > 20:
                     issues.append(f"Secondary phone number too long: {len(secondary_tel)} chars (max 20)")
-                if not secondary_tel.startswith('20') or len(secondary_tel) != 11:
-                    issues.append(f"Secondary phone must be in +20 format (11 digits starting with 20). Got: {secondary_tel}")
+                # Only check if phone starts with valid Egyptian mobile prefixes
+                if not (secondary_tel.startswith('010') or secondary_tel.startswith('011') or 
+                       secondary_tel.startswith('012') or secondary_tel.startswith('015')):
+                    issues.append(f"Secondary phone must start with 010, 011, 012, or 015. Got: {secondary_tel}")
             
             # Check address field length
             address1 = customer.get('Address1', '')
@@ -333,61 +337,22 @@ class KhazenlyService:
                 return sanitized
             
             def validate_phone(phone):
-                """Validate and sanitize phone number for Khazenly API"""
+                """Process phone number for Khazenly API - remove +2/2 prefix if present"""
                 if not phone:
                     return ""
                 
-                # Remove all non-digit characters
-                import re
-                digits_only = re.sub(r'\D', '', str(phone))
+                # Convert to string and strip whitespace
+                phone_str = str(phone).strip()
                 
-                # Handle empty result after cleaning
-                if not digits_only:
-                    logger.warning(f"Phone number contains no digits: {phone}")
-                    return ""
+                # Remove +2 or 2 prefix if present (Egyptian country code)
+                if phone_str.startswith('+2'):
+                    phone_str = phone_str[2:]  # Remove '+2'
+                elif phone_str.startswith('2'):
+                    phone_str = phone_str[1:]   # Remove '2'
                 
-                # Egyptian phone validation - must be 10 or 11 digits
-                if len(digits_only) < 10:
-                    logger.error(f"Phone number too short: {digits_only} ({len(digits_only)} digits)")
-                    return ""
-                elif len(digits_only) > 11:
-                    # If too long, take the last 11 digits (most recent digits)
-                    digits_only = digits_only[-11:]
-                    logger.info(f"Phone truncated to 11 digits: {digits_only}")
-                
-                # Ensure proper Egyptian mobile format (+20 format)
-                if digits_only.startswith('20') and len(digits_only) == 11:
-                    # Already in +20 format (20XXXXXXXXX)
-                    formatted_phone = digits_only
-                elif digits_only.startswith('01') and len(digits_only) == 11:
-                    # Convert 01XXXXXXXXXX to 20XXXXXXXXX format (11 digits starting with 01)
-                    formatted_phone = '20' + digits_only[2:]  # Remove '01', add '20'
-                elif digits_only.startswith('01') and len(digits_only) == 10:
-                    # Convert 01XXXXXXXX to 20XXXXXXXXX format (10 digits starting with 01)
-                    formatted_phone = '20' + digits_only[1:]  # Remove '0', add '20'
-                elif digits_only.startswith('1') and len(digits_only) == 10:
-                    # Handle 1XXXXXXXXX format (already without country code)
-                    formatted_phone = '20' + digits_only
-                elif len(digits_only) == 10 and digits_only.startswith('0'):
-                    # Handle 0XXXXXXXXX format
-                    formatted_phone = '20' + digits_only[1:]  # Remove leading 0, add 20
-                elif len(digits_only) == 10:
-                    # Handle XXXXXXXXXX format (10 digits without prefix)
-                    formatted_phone = '20' + digits_only
-                else:
-                    # Try to make it valid by adding 20 prefix if needed
-                    if len(digits_only) == 9:
-                        formatted_phone = '20' + digits_only
-                    else:
-                        formatted_phone = digits_only
-                        logger.warning(f"Unusual phone format: {phone} -> {digits_only}")
-                
-                # Final validation - must start with 20 and be 11 digits
-                if not formatted_phone.startswith('20') or len(formatted_phone) != 11:
-                    logger.error(f"Invalid phone format after processing: {formatted_phone} (original: {phone})")
-                    return ""
-                
-                return formatted_phone
+                # Return the phone as-is after prefix removal
+                # Khazenly expects Egyptian mobile numbers starting with 010, 011, 012, 015
+                return phone_str
             
             # Get city and government separately for proper field mapping
             # City should be the actual city from pilladdress, government should be the government name
@@ -501,15 +466,17 @@ class KhazenlyService:
                 if not value or str(value).strip() == '':
                     validation_errors.append(f"{field_name} is empty")
             
-            # Phone number format validation (must be +20 format)
+            # Phone number format validation
             tel = customer_data.get('Tel', '')
-            if tel and (not tel.startswith('20') or len(tel) != 11):
-                validation_errors.append(f"Primary phone must be in +20 format (11 digits starting with 20). Got: {tel}")
+            if tel and not (tel.startswith('010') or tel.startswith('011') or 
+                           tel.startswith('012') or tel.startswith('015')):
+                validation_errors.append(f"Primary phone must start with 010, 011, 012, or 015. Got: {tel}")
             
             secondary_tel = customer_data.get('SecondaryTel', '')
             if secondary_tel and secondary_tel != '':
-                if not secondary_tel.startswith('20') or len(secondary_tel) != 11:
-                    validation_errors.append(f"Secondary phone must be in +20 format (11 digits starting with 20). Got: {secondary_tel}")
+                if not (secondary_tel.startswith('010') or secondary_tel.startswith('011') or 
+                       secondary_tel.startswith('012') or secondary_tel.startswith('015')):
+                    validation_errors.append(f"Secondary phone must start with 010, 011, 012, or 015. Got: {secondary_tel}")
             
             # Field length validation (based on Khazenly API limits)
             field_length_limits = [
@@ -526,20 +493,8 @@ class KhazenlyService:
                 if value and len(str(value)) > max_length:
                     validation_errors.append(f"{field_name} exceeds {max_length} characters (got {len(str(value))})")
             
-            # Special character validation (prevent API rejection)
-            # Allow commas (,) and periods (.) in addresses as they are valid punctuation
-            problematic_chars = ['"', "'", '\n', '\t', '\r', '`', '~', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '=', '{', '}', '[', ']', '|', '\\', ':', ';', '<', '>', '?', '/']
-            
-            text_fields = ['customerName', 'Address1', 'City']
-            for field in text_fields:
-                value = customer_data.get(field, '')
-                if value:
-                    found_chars = []
-                    for char in problematic_chars:
-                        if char in value:
-                            found_chars.append(char)
-                    if found_chars:
-                        validation_errors.append(f"{field} contains problematic characters: {found_chars}")
+            # Note: Removed special character validation - let Khazenly API handle character validation
+            # This allows any address format that Khazenly accepts
             
             # Government name validation (must match Khazenly expected values)
             city = customer_data.get('City', '')
