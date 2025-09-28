@@ -1,4 +1,11 @@
 from django.contrib import admin
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.urls import path
+from django.utils.html import format_html
+import json
+import csv
 from .models import AllowedEndpoint, AllowedEndpointGroup, UserPermission, FrontEndPage, FrontEndPagePermission
 
 
@@ -27,6 +34,103 @@ class FrontEndPageAdmin(admin.ModelAdmin):
     search_fields = ('title', 'url')
     list_filter = ('created_at', 'updated_at')
     ordering = ('title',)
+    
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('export/', self.admin_site.admin_view(self.export_pages), name='permissions_frontendpage_export'),
+            path('import/', self.admin_site.admin_view(self.import_pages), name='permissions_frontendpage_import'),
+        ]
+        return custom_urls + urls
+    
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context['export_url'] = 'export/'
+        extra_context['import_url'] = 'import/'
+        return super().changelist_view(request, extra_context)
+    
+    def export_pages(self, request):
+        """Export all FrontEndPage records to JSON"""
+        pages = FrontEndPage.objects.all().values('title', 'url')
+        data = list(pages)
+        
+        response = HttpResponse(
+            json.dumps(data, indent=2),
+            content_type='application/json'
+        )
+        response['Content-Disposition'] = 'attachment; filename="frontend_pages_export.json"'
+        return response
+    
+    def import_pages(self, request):
+        """Import FrontEndPage records from JSON file"""
+        if request.method == 'POST':
+            if 'file' not in request.FILES:
+                messages.error(request, 'Please select a file to import.')
+                return redirect('..')
+            
+            file = request.FILES['file']
+            
+            if not file.name.endswith('.json'):
+                messages.error(request, 'Please upload a JSON file.')
+                return redirect('..')
+            
+            try:
+                data = json.loads(file.read().decode('utf-8'))
+                
+                if not isinstance(data, list):
+                    messages.error(request, 'Invalid file format. Expected a JSON array.')
+                    return redirect('..')
+                
+                created_count = 0
+                updated_count = 0
+                error_count = 0
+                
+                for item in data:
+                    try:
+                        if 'title' not in item or 'url' not in item:
+                            error_count += 1
+                            continue
+                        
+                        page, created = FrontEndPage.objects.get_or_create(
+                            url=item['url'],
+                            defaults={'title': item['title']}
+                        )
+                        
+                        if created:
+                            created_count += 1
+                        else:
+                            # Update title if it's different
+                            if page.title != item['title']:
+                                page.title = item['title']
+                                page.save()
+                                updated_count += 1
+                    
+                    except Exception as e:
+                        error_count += 1
+                        continue
+                
+                success_msg = f'Import completed: {created_count} created, {updated_count} updated'
+                if error_count > 0:
+                    success_msg += f', {error_count} errors'
+                
+                messages.success(request, success_msg)
+                return redirect('..')
+                
+            except json.JSONDecodeError:
+                messages.error(request, 'Invalid JSON file format.')
+                return redirect('..')
+            except Exception as e:
+                messages.error(request, f'Error importing file: {str(e)}')
+                return redirect('..')
+        
+        # GET request - show import form
+        return render(request, 'admin/permissions/frontendpage/import.html')
+    
+    class Media:
+        css = {
+            'all': ('admin/css/custom_admin.css',)
+        }
+        js = ('admin/js/custom_admin.js',)
 
 
 # AllowedFrontEndPageAdmin removed - using FrontEndPagePermissionAdmin instead
