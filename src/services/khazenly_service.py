@@ -182,30 +182,58 @@ class KhazenlyService:
                     if not item.get('unitPrice'):
                         issues.append(f"❌ Product {item_num} missing unit price ({item_name[:30] if item_name else 'Unknown Product'})")
             
-            # Government name validation with detailed feedback
+            # Khazenly city validation using their actual supported cities
             if city:
-                from products.models import GOVERNMENT_CHOICES
-                valid_governments = [gov[1] for gov in GOVERNMENT_CHOICES]
+                # Khazenly's officially supported cities from their documentation
+                khazenly_supported_cities = [
+                    'Alexandria', 'Assiut', 'Aswan', 'Bani-Sweif', 'Behera', 'Cairo', 
+                    'Dakahleya', 'Damietta', 'Fayoum', 'Giza', 'Hurghada', 'Ismailia', 
+                    'Luxor', 'Mahalla', 'Mansoura', 'Marsa Matrouh', 'Menya', 'Monefeya', 
+                    'North Coast', 'Port-Said', 'Qalyubia', 'Qena', 'Red Sea', 'Sharkeya', 
+                    'Sohag', 'Suez', 'Tanta', 'Zagazig', 'Gharbeya', 'Kafr El Sheikh', 
+                    'Al-Wadi Al-Gadid', 'Sharm El Sheikh', 'North Sinai', 'South Sinai'
+                ]
                 
-                # The city field should contain the government name for Khazenly
-                # If it doesn't match any valid government, it's likely a city name instead of government
-                if city not in valid_governments:
-                    # Check if it contains a government name (format: "Government - City")
-                    government_found = False
-                    matched_government = None
-                    for gov_name in valid_governments:
-                        if gov_name.lower() in city.lower():
-                            government_found = True
-                            matched_government = gov_name
-                            break
+                # Check if city matches any Khazenly supported city
+                city_found = False
+                matched_city = None
+                
+                # First, try exact match
+                if city in khazenly_supported_cities:
+                    city_found = True
+                    matched_city = city
+                    logger.info(f"✅ Exact match found: '{city}' is supported by Khazenly")
+                else:
+                    # Try flexible matching for common variations
+                    city_normalized = city.lower().replace('-', ' ').replace('_', ' ').strip()
                     
-                    if government_found:
-                        logger.info(f"✅ Government '{matched_government}' found in city field '{city}'")
-                    else:
-                        # Provide helpful error message with available options
-                        available_govs = ', '.join(valid_governments[:5]) + '...'
-                        issues.append(f"⚠️ City field '{city}' doesn't match any Egyptian government. Expected one of: {available_govs}")
-                        logger.warning(f"City field '{city}' doesn't match any government name. Available: {available_govs}")
+                    for supported_city in khazenly_supported_cities:
+                        supported_normalized = supported_city.lower().replace('-', ' ').replace('_', ' ').strip()
+                        
+                        # Check if normalized versions match
+                        if city_normalized == supported_normalized:
+                            city_found = True
+                            matched_city = supported_city
+                            logger.info(f"✅ Khazenly city '{supported_city}' matched with flexible matching for input '{city}'")
+                            break
+                        
+                        # Also check if the input contains the supported city name
+                        if supported_normalized in city_normalized or city_normalized in supported_normalized:
+                            city_found = True
+                            matched_city = supported_city
+                            logger.info(f"✅ Khazenly city '{supported_city}' found within input '{city}'")
+                            break
+                
+                if not city_found:
+                    # Provide helpful error message with Khazenly's supported cities
+                    available_cities = ', '.join(khazenly_supported_cities[:8]) + '...'
+                    issues.append(f"❌ City/Government '{city}' is not a valid Khazenly supported city. Supported cities: {available_cities}")
+                    logger.warning(f"City '{city}' is not supported by Khazenly. Available cities: {available_cities}")
+                    
+                    # Log the normalized comparison for debugging
+                    logger.debug(f"Normalized input: '{city_normalized}' vs Khazenly cities: {[c.lower().replace('-', ' ').replace('_', ' ').strip() for c in khazenly_supported_cities[:5]]}...")
+                else:
+                    logger.info(f"✅ City validation passed: '{city}' → '{matched_city}'")
             
             if issues:
                 error_summary = f"Validation failed with {len(issues)} issues: " + "; ".join(issues[:3])
@@ -629,13 +657,45 @@ class KhazenlyService:
             # Note: Removed special character validation - let Khazenly API handle character validation
             # This allows any address format that Khazenly accepts
             
-            # Government name validation (must match Khazenly expected values)
+            # Government name validation (must match Khazenly supported cities)
             city = customer_data.get('City', '')
             if city:
-                from products.models import GOVERNMENT_CHOICES
-                valid_governments = [gov[1] for gov in GOVERNMENT_CHOICES]
-                if city not in valid_governments:
-                    validation_errors.append(f"City/Government '{city}' is not a valid Egyptian government")
+                # Use the same Khazenly supported cities list as in validate_order_data
+                khazenly_supported_cities = [
+                    'Alexandria', 'Assiut', 'Aswan', 'Bani-Sweif', 'Behera', 'Cairo', 
+                    'Dakahleya', 'Damietta', 'Fayoum', 'Giza', 'Hurghada', 'Ismailia', 
+                    'Luxor', 'Mahalla', 'Mansoura', 'Marsa Matrouh', 'Menya', 'Monefeya', 
+                    'North Coast', 'Port-Said', 'Qalyubia', 'Qena', 'Red Sea', 'Sharkeya', 
+                    'Sohag', 'Suez', 'Tanta', 'Zagazig', 'Gharbeya', 'Kafr El Sheikh', 
+                    'Al-Wadi Al-Gadid', 'Sharm El Sheikh', 'North Sinai', 'South Sinai'
+                ]
+                
+                # Check if city matches any Khazenly supported city with flexible matching
+                city_found = False
+                
+                # First, try exact match
+                if city in khazenly_supported_cities:
+                    city_found = True
+                else:
+                    # Try flexible matching for common variations
+                    city_normalized = city.lower().replace('-', ' ').replace('_', ' ').strip()
+                    
+                    for supported_city in khazenly_supported_cities:
+                        supported_normalized = supported_city.lower().replace('-', ' ').replace('_', ' ').strip()
+                        
+                        # Check if normalized versions match
+                        if city_normalized == supported_normalized:
+                            city_found = True
+                            break
+                        
+                        # Also check if the input contains the supported city name
+                        if supported_normalized in city_normalized or city_normalized in supported_normalized:
+                            city_found = True
+                            break
+                
+                if not city_found:
+                    available_cities = ', '.join(khazenly_supported_cities[:8]) + '...'
+                    validation_errors.append(f"City/Government '{city}' is not supported by Khazenly. Supported cities: {available_cities}")
             
             if validation_errors:
                 error_msg = f"Customer data validation failed: {', '.join(validation_errors)}"
