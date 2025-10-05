@@ -23,7 +23,7 @@ from .filters import CategoryFilter, CouponDiscountFilter, PillFilter, ProductFi
 from .models import (
     Category, Color, CouponDiscount, PillAddress, ProductAvailability,
     ProductImage, Rating, Shipping, SubCategory, Brand, Product, Pill,
-    SpinWheelDiscount, SpinWheelResult
+    SpinWheelDiscount, SpinWheelResult, FreeShippingOffer
 )
 from .permissions import IsOwner, IsOwnerOrReadOnly
 
@@ -1785,6 +1785,73 @@ def resend_khazenly_orders_view(request):
             'success': False,
             'error': f'Internal server error: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Free Shipping Offer CRUD Views
+class FreeShippingOfferListCreateView(generics.ListCreateAPIView):
+    queryset = FreeShippingOffer.objects.all()
+    serializer_class = FreeShippingOfferSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [DjangoFilterBackend, rest_filters.SearchFilter]
+    filterset_fields = ['is_active', 'target_type']
+    search_fields = ['description']
+    ordering_fields = ['created_at', 'start_date', 'end_date']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Custom filter for currently active offers
+        currently_active = self.request.GET.get('currently_active', None)
+        if currently_active is not None:
+            now = timezone.now()
+            if currently_active.lower() in ['true', '1']:
+                # Filter for currently active offers
+                queryset = queryset.filter(
+                    is_active=True,
+                    start_date__lte=now,
+                    end_date__gte=now
+                )
+            elif currently_active.lower() in ['false', '0']:
+                # Filter for currently inactive offers (either is_active=False OR outside date range)
+                from django.db.models import Q
+                queryset = queryset.filter(
+                    Q(is_active=False) |
+                    Q(start_date__gt=now) |
+                    Q(end_date__lt=now)
+                )
+        
+        return queryset
+
+
+class FreeShippingOfferRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = FreeShippingOffer.objects.all()
+    serializer_class = FreeShippingOfferSerializer
+    permission_classes = [IsAdminUser]
+
+
+# API endpoint to detect free shipping offers
+class DetectFreeShippingOffersView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """
+        Detect active free shipping offers for products
+        """
+        # Get all currently active free shipping offers
+        active_offers = FreeShippingOffer.objects.filter(
+            is_active=True,
+            start_date__lte=timezone.now(),
+            end_date__gte=timezone.now()
+        ).order_by('created_at')
+        
+        response_data = {
+            'has_active_offers': active_offers.exists(),
+            'total_active_offers': active_offers.count(),
+            'active_offers': FreeShippingOfferSerializer(active_offers, many=True).data
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 

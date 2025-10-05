@@ -10,7 +10,8 @@ from .models import (
     BestProduct, Category, CartSettings, CouponDiscount, Discount, LovedProduct, PayRequest, PillAddress, PillGift,
     PillItem, PillStatusLog, PriceDropAlert, ProductDescription, Shipping,
     SpecialProduct, SpinWheelDiscount, SpinWheelResult, SpinWheelSettings, StockAlert,
-    SubCategory, Brand, Product, ProductImage, ProductAvailability, Rating, Color, Pill, Subject, Teacher
+    SubCategory, Brand, Product, ProductImage, ProductAvailability, Rating, Color, Pill, Subject, Teacher,
+    FreeShippingOffer
 )
 
 class SubCategorySerializer(serializers.ModelSerializer):
@@ -1324,6 +1325,51 @@ class CartSettingsSerializer(serializers.ModelSerializer):
         if value > 50:
             raise serializers.ValidationError("Maximum cart items cannot exceed 50.")
         return value
+
+
+class FreeShippingOfferSerializer(serializers.ModelSerializer):
+    is_currently_active = serializers.SerializerMethodField()
+    target_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FreeShippingOffer
+        fields = [
+            'id', 'description', 'target_type', 'category', 'subcategory', 
+            'brand', 'subject', 'teacher', 'start_date', 'end_date', 
+            'is_active', 'is_currently_active', 'target_name', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'is_currently_active', 'target_name']
+    
+    def get_is_currently_active(self, obj):
+        return obj.is_currently_active
+    
+    def get_target_name(self, obj):
+        return obj.get_target_name()
+    
+    def validate(self, data):
+        if data.get('start_date') and data.get('end_date'):
+            if data['start_date'] >= data['end_date']:
+                raise serializers.ValidationError("Start date must be before end date.")
+        
+        # Validate that only one target is selected based on target_type
+        target_type = data.get('target_type')
+        if target_type:
+            target_fields = ['category', 'subcategory', 'brand', 'subject', 'teacher']
+            selected_targets = [field for field in target_fields if data.get(field)]
+            
+            if len(selected_targets) != 1:
+                raise serializers.ValidationError(
+                    f"Exactly one target must be selected for target_type '{target_type}'"
+                )
+            
+            # Validate that the selected target matches the target_type
+            expected_field = target_type
+            if expected_field not in selected_targets:
+                raise serializers.ValidationError(
+                    f"Selected target must match the target_type '{target_type}'"
+                )
+        
+        return data
 
 
 

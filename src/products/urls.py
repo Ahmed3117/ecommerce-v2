@@ -114,6 +114,13 @@ urlpatterns = [
     path('dashboard/pill-gifts/', views.PillGiftListCreateView.as_view(), name='pill-gift-list-create'),
     path('dashboard/pill-gifts/<int:pk>/', views.PillGiftRetrieveUpdateDestroyView.as_view(), name='pill-gift-detail'),
 
+    # Free Shipping Offer Dashboard URLs
+    path('dashboard/free-shipping-offers/', views.FreeShippingOfferListCreateView.as_view(), name='admin-free-shipping-offer-list-create'),
+    path('dashboard/free-shipping-offers/<int:pk>/', views.FreeShippingOfferRetrieveUpdateDestroyView.as_view(), name='admin-free-shipping-offer-detail'),
+    
+    # Free Shipping Detection API
+    path('detect-free-shipping/', views.DetectFreeShippingOffersView.as_view(), name='detect-free-shipping-offers'),
+
 
     # Fawaterak Payment API Endpoints (DRF-based)
     path('api/payment/create/<int:pill_id>/', payment_views.create_payment_view, name='api_create_payment'),
