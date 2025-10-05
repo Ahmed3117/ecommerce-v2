@@ -1100,7 +1100,42 @@ class Pill(models.Model):
             return self.price_without_coupons_or_gifts() * (self.gift_discount.discount_value / 100)
         return 0.0
 
+    def has_free_shipping_offer(self):
+        """Check if any items in this pill qualify for free shipping offers."""
+        # Get all active free shipping offers
+        active_offers = FreeShippingOffer.get_active_offers()
+        
+        if not active_offers.exists():
+            return False
+        
+        # Check if any item in the pill qualifies for any active offer
+        for pill_item in self.items.all():
+            product = pill_item.product
+            for offer in active_offers:
+                if offer.applies_to_product(product):
+                    return True
+        
+        return False
+
+    def get_applicable_free_shipping_offers(self):
+        """Get all free shipping offers that apply to items in this pill."""
+        active_offers = FreeShippingOffer.get_active_offers()
+        applicable_offers = []
+        
+        for pill_item in self.items.all():
+            product = pill_item.product
+            for offer in active_offers:
+                if offer.applies_to_product(product) and offer not in applicable_offers:
+                    applicable_offers.append(offer)
+        
+        return applicable_offers
+
     def shipping_price(self):
+        # Check if free shipping applies
+        if self.has_free_shipping_offer():
+            # Still add over tax amount even with free shipping
+            return self.calculate_over_tax_price()
+        
         if hasattr(self, 'pilladdress'):
             try:
                 shipping = Shipping.objects.filter(government=self.pilladdress.government).first()
@@ -1837,6 +1872,174 @@ class OverTaxConfig(models.Model):
         if self.is_active:
             OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
         super().save(*args, **kwargs)
+
+
+class FreeShippingOffer(models.Model):
+    """
+    Model for managing free shipping offers on products based on category, subcategory, brand, subject, or teacher.
+    """
+    TARGET_TYPE_CHOICES = [
+        ('category', 'Category'),
+        ('subcategory', 'SubCategory'),
+        ('brand', 'Brand'),
+        ('subject', 'Subject'),
+        ('teacher', 'Teacher'),
+    ]
+    
+    description = models.CharField(
+        max_length=500,
+        help_text="Description of the free shipping offer"
+    )
+    target_type = models.CharField(
+        max_length=20,
+        choices=TARGET_TYPE_CHOICES,
+        help_text="Type of target for the free shipping offer"
+    )
+    
+    # Foreign key fields for different target types
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='free_shipping_offers',
+        help_text="Category to apply free shipping to"
+    )
+    subcategory = models.ForeignKey(
+        SubCategory,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='free_shipping_offers',
+        help_text="SubCategory to apply free shipping to"
+    )
+    brand = models.ForeignKey(
+        Brand,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='free_shipping_offers',
+        help_text="Brand to apply free shipping to"
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='free_shipping_offers',
+        help_text="Subject to apply free shipping to"
+    )
+    teacher = models.ForeignKey(
+        Teacher,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='free_shipping_offers',
+        help_text="Teacher to apply free shipping to"
+    )
+    
+    start_date = models.DateTimeField(
+        help_text="Start date and time for the free shipping offer"
+    )
+    end_date = models.DateTimeField(
+        help_text="End date and time for the free shipping offer"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this free shipping offer is currently active"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Free Shipping Offer"
+        verbose_name_plural = "Free Shipping Offers"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target_name = self.get_target_name()
+        return f"Free Shipping: {self.description} ({self.target_type}: {target_name})"
+
+    def clean(self):
+        """Validate that exactly one target field is set based on target_type."""
+        from django.core.exceptions import ValidationError
+        
+        # Check that the correct field is set based on target_type
+        target_fields = {
+            'category': self.category,
+            'subcategory': self.subcategory,
+            'brand': self.brand,
+            'subject': self.subject,
+            'teacher': self.teacher,
+        }
+        
+        # Ensure the selected target type has a corresponding value
+        if not target_fields.get(self.target_type):
+            raise ValidationError(f"You must select a {self.target_type} for this offer.")
+        
+        # Ensure other target fields are None
+        for field_name, field_value in target_fields.items():
+            if field_name != self.target_type and field_value is not None:
+                raise ValidationError(f"Only {self.target_type} should be selected, but {field_name} is also set.")
+        
+        # Validate date range
+        if self.start_date and self.end_date and self.start_date >= self.end_date:
+            raise ValidationError("Start date must be before end date.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def get_target_name(self):
+        """Get the name of the target object."""
+        if self.target_type == 'category' and self.category:
+            return self.category.name
+        elif self.target_type == 'subcategory' and self.subcategory:
+            return self.subcategory.name
+        elif self.target_type == 'brand' and self.brand:
+            return self.brand.name
+        elif self.target_type == 'subject' and self.subject:
+            return self.subject.name
+        elif self.target_type == 'teacher' and self.teacher:
+            return self.teacher.name
+        return "Unknown"
+
+    @property
+    def is_currently_active(self):
+        """Check if the offer is currently active based on dates and active status."""
+        if not self.is_active:
+            return False
+        
+        now = timezone.now()
+        return self.start_date <= now <= self.end_date
+
+    def applies_to_product(self, product):
+        """Check if this free shipping offer applies to a given product."""
+        if not self.is_currently_active:
+            return False
+        
+        if self.target_type == 'category':
+            return product.category == self.category
+        elif self.target_type == 'subcategory':
+            return product.sub_category == self.subcategory
+        elif self.target_type == 'brand':
+            return product.brand == self.brand
+        elif self.target_type == 'subject':
+            return product.subject == self.subject
+        elif self.target_type == 'teacher':
+            return product.teacher == self.teacher
+        
+        return False
+
+    @classmethod
+    def get_active_offers(cls):
+        """Get all currently active free shipping offers."""
+        now = timezone.now()
+        return cls.objects.filter(
+            is_active=True,
+            start_date__lte=now,
+            end_date__gte=now
+        )
 
 
 def prepare_whatsapp_message(phone_number, pill):

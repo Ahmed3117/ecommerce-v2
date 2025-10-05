@@ -4,12 +4,12 @@ from django.utils.html import format_html
 from django.utils import timezone
 from django.http import HttpResponse
 from .models import (
-    Category, SubCategory, Brand, Product, ProductImage, ProductDescription,
+    Category, SubCategory, Brand, Subject, Teacher, Product, ProductImage, ProductDescription,
     Color, ProductAvailability, Shipping, PillItem, Pill, PillAddress,
     PillStatusLog, CouponDiscount, Rating, Discount, PayRequest, LovedProduct,
     StockAlert, PriceDropAlert, SpecialProduct, SpinWheelDiscount,
     SpinWheelResult, SpinWheelSettings, CartSettings, PillGift, KhazenlyWebhookLog,
-    OverTaxConfig
+    OverTaxConfig, FreeShippingOffer
 )
 
 import json
@@ -83,6 +83,20 @@ class BrandAdmin(admin.ModelAdmin):
         if obj.logo:
             return format_html('<img src="{}" width="50" height="50" />', obj.logo.url)
         return "No Logo"
+
+@admin.register(Subject)
+class SubjectAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created_at')
+    search_fields = ('name',)
+    readonly_fields = ('created_at',)
+
+@admin.register(Teacher)
+class TeacherAdmin(admin.ModelAdmin):
+    list_display = ('name', 'subject', 'created_at')
+    search_fields = ('name', 'subject__name')
+    autocomplete_fields = ('subject',)
+    list_filter = ('subject', 'created_at')
+    readonly_fields = ('created_at',)
 
 class ProductImageInline(admin.TabularInline):
     model = ProductImage
@@ -1049,6 +1063,44 @@ class OverTaxConfigAdmin(admin.ModelAdmin):
         if obj.is_active:
             OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
         super().save_model(request, obj, form, change)
+
+
+@admin.register(FreeShippingOffer)
+class FreeShippingOfferAdmin(admin.ModelAdmin):
+    list_display = [
+        'description', 'target_type', 'get_target_name', 'start_date', 'end_date', 
+        'is_active', 'is_currently_active', 'created_at'
+    ]
+    list_filter = ['target_type', 'is_active', 'start_date', 'end_date', 'created_at']
+    search_fields = ['description', 'category__name', 'subcategory__name', 'brand__name', 'subject__name', 'teacher__name']
+    readonly_fields = ['created_at', 'updated_at']
+    autocomplete_fields = ['category', 'subcategory', 'brand', 'subject', 'teacher']
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('description', 'target_type', 'is_active')
+        }),
+        ('Target Selection', {
+            'fields': ('category', 'subcategory', 'brand', 'subject', 'teacher'),
+            'description': 'Select the target based on the target type chosen above.'
+        }),
+        ('Date Range', {
+            'fields': ('start_date', 'end_date')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    @admin.display(description='Currently Active', boolean=True)
+    def is_currently_active(self, obj):
+        return obj.is_currently_active
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'category', 'subcategory', 'brand', 'subject', 'teacher'
+        )
 
 
 
