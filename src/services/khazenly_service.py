@@ -148,6 +148,7 @@ class KhazenlyService:
                        primary_tel.startswith('012') or primary_tel.startswith('015')):
                     issues.append(f"❌ Primary phone invalid format: '{primary_tel}' (must start with 010, 011, 012, or 015)")
             
+            # REVERTED: Use 'SecondaryTel' (uppercase 'S') - lowercase doesn't work with Khazenly
             secondary_tel = customer.get('SecondaryTel', '')
             if secondary_tel and secondary_tel != '':
                 if len(secondary_tel) > 20:
@@ -169,18 +170,20 @@ class KhazenlyService:
             else:
                 for i, item in enumerate(line_items):
                     item_num = i + 1
-                    item_name = item.get('itemName', '')
+                    # FIXED: Use correct field name 'ItemName' (PascalCase) instead of 'itemName'
+                    item_name = item.get('ItemName', '')
                     
                     if item_name and len(item_name) > 200:
                         issues.append(f"❌ Product {item_num} name too long: '{item_name[:30]}...' ({len(item_name)}/200 chars)")
                     
-                    # Check required line item fields with product context
-                    if not item.get('itemNumber'):
-                        issues.append(f"❌ Product {item_num} missing item number ({item_name[:30] if item_name else 'Unknown Product'})")
-                    if not item.get('quantity'):
+                    # FIXED: Check for correct Khazenly field names (PascalCase)
+                    # Required fields: SKU, ItemName, Price, Quantity, ItemId
+                    if not item.get('SKU'):
+                        issues.append(f"❌ Product {item_num} missing SKU ({item_name[:30] if item_name else 'Unknown Product'})")
+                    if not item.get('Quantity'):
                         issues.append(f"❌ Product {item_num} missing quantity ({item_name[:30] if item_name else 'Unknown Product'})")
-                    if not item.get('unitPrice'):
-                        issues.append(f"❌ Product {item_num} missing unit price ({item_name[:30] if item_name else 'Unknown Product'})")
+                    if not item.get('Price'):
+                        issues.append(f"❌ Product {item_num} missing price ({item_name[:30] if item_name else 'Unknown Product'})")
             
             # Khazenly city validation using their actual supported cities
             if city:
@@ -311,16 +314,14 @@ class KhazenlyService:
                 # Ensure description doesn't exceed reasonable length (Khazenly might have limits)
                 item_description = item_description[:150]  # Limit to 150 characters
                 
-                # Use logical product data for line items
+                # Use logical product data for line items - FIXED: Match Khazenly's exact field names
                 line_items.append({
-                    "sku": product.product_number if product.product_number else f"PROD-{product.id}",  # Use product number as SKU
-                    "itemNumber": product.product_number if product.product_number else f"PROD-{product.id}",  # Required: Item number
-                    "itemName": item_description,  # Use detailed product description with color/size
-                    "price": discounted_price,  # Use discounted price
-                    "unitPrice": discounted_price,  # Required: Unit price (same as price)
-                    "quantity": item.quantity,  # Item quantity
-                    "discountAmount": item_discount,  # Actual discount on the product
-                    "itemId": item.id  # Pill item ID
+                    "SKU": product.product_number if product.product_number else f"PROD-{product.id}",  # FIXED: Uppercase SKU
+                    "ItemName": item_description,  # FIXED: PascalCase ItemName
+                    "Price": discounted_price,  # FIXED: PascalCase Price
+                    "Quantity": item.quantity,  # FIXED: PascalCase Quantity
+                    "DiscountAmount": item_discount if item_discount > 0 else None,  # FIXED: PascalCase, null if 0
+                    "ItemId": str(item.id)  # FIXED: PascalCase ItemId, convert to string
                 })
             
             logger.info(f"🔍 Created {len(line_items)} line items for pill {pill.pill_number}")
@@ -365,71 +366,56 @@ class KhazenlyService:
             
             # Validate and sanitize customer data
             def sanitize_text(text, max_length, field_name="field"):
-                """Sanitize text by removing invalid characters and limiting length"""
+                """
+                Enhanced text sanitization for Khazenly API
+                Handles Arabic text, special characters, and encoding issues
+                """
                 if not text:
                     return ""
                 
                 # Convert to string and strip whitespace
                 sanitized = str(text).strip()
                 
-                # Remove special characters that might cause issues with Khazenly API
                 import re
                 
-                # For city names, handle special cases like "Menya - ابو قرقاص"
-                if field_name == "city":
-                    # Split on dash and take the Arabic part if it exists
-                    if " - " in sanitized:
-                        parts = sanitized.split(" - ")
-                        # Prefer Arabic part (contains Arabic characters)
-                        arabic_part = None
-                        for part in parts:
-                            if re.search(r'[\u0600-\u06FF]', part.strip()):
-                                arabic_part = part.strip()
-                                break
-                        if arabic_part:
-                            sanitized = arabic_part
-                            logger.info(f"City field: Using Arabic part '{arabic_part}' from '{text}'")
-                        else:
-                            # If no Arabic part, use the first part
-                            sanitized = parts[0].strip()
-                            logger.info(f"City field: Using first part '{sanitized}' from '{text}'")
-                
-                # Keep Arabic characters, English letters, numbers, spaces, and basic punctuation
-                # Arabic Unicode ranges: \u0600-\u06FF (main), \u0750-\u077F (supplement), \u08A0-\u08FF (extended), \uFB50-\uFDFF (presentation forms A), \uFE70-\uFEFF (presentation forms B)
-                # Allow basic punctuation but remove problematic characters
-                sanitized = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+', ' ', sanitized)
+                # Keep Arabic characters, English letters, numbers, spaces, and basic safe punctuation
+                # Arabic Unicode ranges: \u0600-\u06FF (main Arabic), \u0750-\u077F (supplement)
+                # Allow: letters, numbers, Arabic characters, spaces, and safe punctuation (.,-)
+                sanitized = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF.,\-]+', ' ', sanitized)
                 
                 # Clean up multiple spaces
                 sanitized = re.sub(r'\s+', ' ', sanitized).strip()
                 
-                # Remove any remaining control characters (except basic whitespace)
+                # Remove control characters (except basic whitespace)
                 sanitized = ''.join(char for char in sanitized if ord(char) >= 32 or char in ' \t')
                 
-                # Ensure proper encoding for Khazenly API
+                # Ensure proper UTF-8 encoding
                 try:
-                    # Test encoding/decoding to ensure it's valid UTF-8
                     sanitized = sanitized.encode('utf-8').decode('utf-8')
                 except (UnicodeEncodeError, UnicodeDecodeError):
-                    # If encoding fails, try to clean up problematic characters
                     sanitized = sanitized.encode('utf-8', 'ignore').decode('utf-8')
-                    logger.warning(f"Encoding issues in {field_name}, removed problematic characters")
+                    logger.warning(f"⚠️ Encoding issues in {field_name}, removed problematic characters")
                 
-                # Limit length (accounting for UTF-8 byte length for Arabic text)
+                # Limit length (be careful with UTF-8 byte length for Arabic)
                 if len(sanitized) > max_length:
-                    logger.warning(f"Truncating {field_name} from {len(sanitized)} to {max_length} characters")
-                    # For Arabic text, be more careful with truncation to avoid breaking characters
+                    logger.warning(f"⚠️ Truncating {field_name} from {len(sanitized)} to {max_length} characters")
                     sanitized = sanitized[:max_length].strip()
-                    # Ensure we didn't break in the middle of a word
-                    if len(sanitized) < len(str(text).strip()) and not sanitized.endswith(' '):
-                        # Find last space to avoid breaking words
+                    # Avoid breaking words - find last space
+                    if not sanitized.endswith(' '):
                         last_space = sanitized.rfind(' ')
-                        if last_space > max_length * 0.8:  # Only if we're not losing too much
+                        if last_space > max_length * 0.8:
                             sanitized = sanitized[:last_space].strip()
                 
+                logger.info(f"✅ Sanitized {field_name}: '{sanitized}' (length: {len(sanitized)})")
                 return sanitized
             
             def validate_phone(phone):
-                """Process phone number for Khazenly API - remove +2/2 prefix if present and validate format"""
+                """
+                Enhanced phone validation for Khazenly API
+                - Removes +2/2 country code prefix
+                - Validates Egyptian mobile format (11 digits, starts with 010/011/012/015)
+                - Returns empty string if invalid
+                """
                 if not phone:
                     return ""
                 
@@ -440,68 +426,98 @@ class KhazenlyService:
                 import re
                 phone_str = re.sub(r'[^\d+]', '', phone_str)
                 
-                # Remove +2 or 2 prefix if present (Egyptian country code)
+                # Remove +2 or 2 prefix (Egyptian country code)
                 if phone_str.startswith('+2'):
-                    phone_str = phone_str[2:]  # Remove '+2'
-                elif phone_str.startswith('2') and len(phone_str) > 10:
-                    phone_str = phone_str[1:]   # Remove '2' only if it looks like a country code
+                    phone_str = phone_str[2:]
+                elif phone_str.startswith('2') and len(phone_str) > 11:
+                    phone_str = phone_str[1:]
                 
-                # Validate Egyptian mobile number format
-                # Egyptian mobile numbers should be 11 digits starting with 010, 011, 012, or 015
-                if phone_str and not (phone_str.startswith('010') or phone_str.startswith('011') or 
-                                    phone_str.startswith('012') or phone_str.startswith('015')):
-                    logger.warning(f"Phone number '{phone}' doesn't start with valid Egyptian mobile prefix (010, 011, 012, 015). Processed as: '{phone_str}'")
+                # Validate Egyptian mobile number format (11 digits, starts with 010/011/012/015)
+                if phone_str:
+                    if len(phone_str) != 11:
+                        logger.warning(f"⚠️ Phone '{phone}' is not 11 digits (got {len(phone_str)})")
+                    
+                    if not (phone_str.startswith('010') or phone_str.startswith('011') or 
+                           phone_str.startswith('012') or phone_str.startswith('015')):
+                        logger.warning(f"⚠️ Phone '{phone}' doesn't start with valid prefix (010/011/012/015)")
+                    
+                    # Ensure exactly 11 digits
+                    if len(phone_str) > 11:
+                        phone_str = phone_str[:11]
+                        logger.warning(f"⚠️ Truncated phone to 11 digits: '{phone_str}'")
                 
-                # Ensure phone number is not too long
-                if len(phone_str) > 11:
-                    logger.warning(f"Phone number '{phone}' is too long ({len(phone_str)} digits), truncating to 11 digits")
-                    phone_str = phone_str[:11]
-                
+                logger.info(f"✅ Validated phone: '{phone}' -> '{phone_str}'")
                 return phone_str
             
             # Get city and government separately for proper field mapping
-            # City should be the actual city from pilladdress, government should be the government name
-            city_name = ""
-            government_name = ""
+            # CRITICAL: Khazenly expects ONLY the government code in the City field
+            # The government code must match their exact list (Alexandria, Cairo, Giza, etc.)
+            khazenly_city = ""
+            
+            # Map our government choices to Khazenly's expected city values
+            GOVERNMENT_TO_KHAZENLY_CITY = {
+                'al': 'Alexandria',
+                'as': 'Assiut',
+                'asw': 'Aswan',
+                'bs': 'Bani-Sweif',
+                'bh': 'Behera',
+                'ca': 'Cairo',
+                'da': 'Dakahleya',
+                'dm': 'Damietta',
+                'fy': 'Fayoum',
+                'gz': 'Giza',
+                'is': 'Ismailia',
+                'ke': 'Kafr El Sheikh',
+                'lu': 'Luxor',
+                'mn': 'Menya',
+                'mf': 'Monefeya',
+                'ps': 'Port-Said',
+                'qa': 'Qalyubia',
+                'qe': 'Qena',
+                'sh': 'Sharkeya',
+                'so': 'Sohag',
+                'su': 'Suez',
+                'gh': 'Gharbeya',
+                'wa': 'Al-Wadi Al-Gadid',
+                'ns': 'North Sinai',
+                'ss': 'South Sinai',
+                'rs': 'Red Sea',
+            }
             
             # Get city from pilladdress
             logger.info(f"🔍 City processing debug:")
-            logger.info(f"  - address.city: '{getattr(address, 'city', 'NOT_FOUND')}' (type: {type(getattr(address, 'city', None))})")
-            logger.info(f"  - address.government: '{getattr(address, 'government', 'NOT_FOUND')}' (type: {type(getattr(address, 'government', None))})")
+            logger.info(f"  - address.city: '{getattr(address, 'city', 'NOT_FOUND')}'")
+            logger.info(f"  - address.government: '{getattr(address, 'government', 'NOT_FOUND')}'")
             
-            if address.city:
-                city_name = address.city[:80] if len(address.city) > 80 else address.city
-                logger.info(f"✅ Using city from address: '{city_name}'")
-                if len(address.city) > 80:
-                    logger.warning(f"City field truncated from '{address.city}' to '{city_name}' for Khazenly")
-            
-            # Get government name from government choices
+            # Map government code to Khazenly city
             if hasattr(address, 'government') and address.government:
                 from products.models import GOVERNMENT_CHOICES
-                gov_dict = dict(GOVERNMENT_CHOICES)
-                government_name = gov_dict.get(address.government, "")
-                logger.info(f"✅ Government found: '{government_name}' (code: {address.government})")
+                khazenly_city = GOVERNMENT_TO_KHAZENLY_CITY.get(address.government, '')
+                if not khazenly_city:
+                    # If government code not in mapping, try to get display name from choices
+                    gov_dict = dict(GOVERNMENT_CHOICES)
+                    khazenly_city = gov_dict.get(address.government, 'Cairo')
+                logger.info(f"✅ Mapped government '{address.government}' to Khazenly city: '{khazenly_city}'")
             else:
-                logger.info("❌ No government found in address")
+                khazenly_city = "Cairo"  # Default fallback
+                logger.warning("⚠️ No government found, using 'Cairo' as default")
             
-            # Fallback logic: if no city but has government, use government as city
-            if not city_name and government_name:
-                city_name = government_name
-                logger.info(f"🔄 Using government '{government_name}' as city since no city specified")
-            elif not city_name:
-                city_name = "Cairo"  # Default fallback
-                logger.warning("⚠️ No city or government found, using 'Cairo' as default")
+            # Validate khazenly_city is in the supported list
+            KHAZENLY_SUPPORTED_CITIES = [
+                'Alexandria', 'Assiut', 'Aswan', 'Bani-Sweif', 'Behera', 'Cairo', 
+                'Dakahleya', 'Damietta', 'Fayoum', 'Giza', 'Hurghada', 'Ismailia', 
+                'Luxor', 'Mahalla', 'Mansoura', 'Marsa Matrouh', 'Menya', 'Monefeya', 
+                'North Coast', 'Port-Said', 'Qalyubia', 'Qena', 'Red Sea', 'Sharkeya', 
+                'Sohag', 'Suez', 'Tanta', 'Zagazig', 'Gharbeya', 'Kafr El Sheikh', 
+                'Al-Wadi Al-Gadid', 'Sharm El Sheikh', 'North Sinai', 'South Sinai'
+            ]
             
-            # Sanitize city and government names
-            original_city = city_name
-            city_name = sanitize_text(city_name, 80, "city")
-            government_name = sanitize_text(government_name, 80, "government")
+            if khazenly_city not in KHAZENLY_SUPPORTED_CITIES:
+                logger.warning(f"⚠️ City '{khazenly_city}' not in Khazenly's supported list. Using 'Cairo' as fallback.")
+                khazenly_city = "Cairo"
             
-            logger.info(f"🔍 City sanitization:")
-            logger.info(f"  - Original city: '{original_city}'")
-            logger.info(f"  - Sanitized city: '{city_name}' (length: {len(city_name)})")
-            logger.info(f"  - City bytes: {city_name.encode('utf-8') if city_name else 'None'}")
-            logger.info(f"Final government for Khazenly: '{government_name}' (length: {len(government_name)})")
+            logger.info(f"🎯 Final Khazenly City field: '{khazenly_city}'")
+            
             
             # Build order data
             order_data = {
@@ -528,17 +544,17 @@ class KhazenlyService:
                 },
                 "Customer": {
                     "customerName": sanitize_text(address.name or f"Customer {pill.user.username}", 50, "customerName"),
-                    "Tel": validate_phone(primary_tel),  # Fixed: Capital T for Tel
-                    "SecondaryTel": validate_phone(secondary_tel),  # Fixed: Capital S for SecondaryTel
+                    "Tel": validate_phone(primary_tel),
+                    "SecondaryTel": validate_phone(secondary_tel),  # REVERTED: Capital S works with Khazenly
                     "Address1": sanitize_text(
                         address.address or 'Address not provided', 
                         100, "address1"
-                    ),  # Only address, city is sent separately in City field
-                    "Address2": "",  # Fixed: Capital A for Address2
-                    "Address3": "",  # Fixed: Capital A for Address3
-                    "City": government_name,  # Khazenly expects government name in City field
-                    "Country": "Egypt",  # Fixed: Capital C for Country
-                    "customerId": f"USER-{pill.user.id}"  # Use prefixed customer ID format
+                    ),
+                    "Address2": "",
+                    "Address3": "",
+                    "City": khazenly_city,  # FIXED: Use mapped Khazenly city from government code
+                    "Country": "Egypt",
+                    "customerId": f"USER-{pill.user.id}"
                 },
                 "lineItems": line_items
             }
@@ -546,176 +562,81 @@ class KhazenlyService:
             # Enhanced customer data validation to prevent "corrupted customer data" errors
             customer_data = order_data.get('Customer', {})
             
+            # Log the complete customer data being sent to Khazenly
+            logger.info("=" * 80)
+            logger.info("📋 CUSTOMER DATA BEING SENT TO KHAZENLY:")
+            logger.info(f"  • Customer Name: '{customer_data.get('customerName')}' ({len(customer_data.get('customerName', ''))} chars, {len(customer_data.get('customerName', '').encode('utf-8'))} bytes)")
+            logger.info(f"  • Primary Tel: '{customer_data.get('Tel')}' ({len(customer_data.get('Tel', ''))} digits)")
+            logger.info(f"  • Secondary Tel: '{customer_data.get('SecondaryTel')}' ({len(customer_data.get('SecondaryTel', ''))} digits)")
+            logger.info(f"  • Address1: '{customer_data.get('Address1')}' ({len(customer_data.get('Address1', ''))} chars, {len(customer_data.get('Address1', '').encode('utf-8'))} bytes)")
+            logger.info(f"  • City: '{customer_data.get('City')}' ({len(customer_data.get('City', ''))} chars)")
+            logger.info(f"  • Country: '{customer_data.get('Country')}'")
+            logger.info(f"  • Customer ID: '{customer_data.get('customerId')}'")
+            logger.info("=" * 80)
+            
             # Additional validation for problematic data patterns
             validation_issues = []
             
             # Check customer name for problematic characters
             customer_name = customer_data.get('customerName', '')
             if customer_name:
-                # Check for null bytes or other problematic characters
+                # Check for null bytes or control characters
                 if '\x00' in customer_name or any(ord(c) < 32 and c not in ' \t\n\r' for c in customer_name):
-                    validation_issues.append(f"Customer name contains invalid control characters: '{customer_name}'")
+                    validation_issues.append(f"Customer name contains invalid control characters")
                 
-                # Check for extremely long names
-                if len(customer_name.encode('utf-8')) > 100:  # Check byte length for UTF-8
-                    validation_issues.append(f"Customer name too long in bytes: {len(customer_name.encode('utf-8'))} bytes")
+                # Check byte length
+                if len(customer_name.encode('utf-8')) > 100:
+                    validation_issues.append(f"Customer name too long: {len(customer_name.encode('utf-8'))} bytes (max 100)")
             
-            # Check phone numbers for format issues
+            # Check phone numbers
             primary_tel = customer_data.get('Tel', '')
             secondary_tel = customer_data.get('SecondaryTel', '')
             
             if primary_tel:
                 if not primary_tel.isdigit():
-                    validation_issues.append(f"Primary phone contains non-digit characters: '{primary_tel}'")
-                if len(primary_tel) < 10 or len(primary_tel) > 11:
-                    validation_issues.append(f"Primary phone invalid length: {len(primary_tel)} digits")
+                    validation_issues.append(f"Primary phone contains non-digit characters")
+                if len(primary_tel) != 11:
+                    validation_issues.append(f"Primary phone must be 11 digits, got {len(primary_tel)}")
             
             if secondary_tel and secondary_tel != '':
                 if not secondary_tel.isdigit():
-                    validation_issues.append(f"Secondary phone contains non-digit characters: '{secondary_tel}'")
-                if len(secondary_tel) < 10 or len(secondary_tel) > 11:
-                    validation_issues.append(f"Secondary phone invalid length: {len(secondary_tel)} digits")
+                    validation_issues.append(f"Secondary phone contains non-digit characters")
+                if len(secondary_tel) != 11:
+                    validation_issues.append(f"Secondary phone must be 11 digits, got {len(secondary_tel)}")
             
             # Check address for problematic characters
             address1 = customer_data.get('Address1', '')
             if address1:
                 if '\x00' in address1 or any(ord(c) < 32 and c not in ' \t\n\r' for c in address1):
                     validation_issues.append(f"Address contains invalid control characters")
-                if len(address1.encode('utf-8')) > 255:  # Check byte length
-                    validation_issues.append(f"Address too long in bytes: {len(address1.encode('utf-8'))} bytes")
+                if len(address1.encode('utf-8')) > 255:
+                    validation_issues.append(f"Address too long: {len(address1.encode('utf-8'))} bytes (max 255)")
             
-            # Check city for problematic characters
+            # Check city
             city = customer_data.get('City', '')
             if city:
                 if '\x00' in city or any(ord(c) < 32 and c not in ' \t\n\r' for c in city):
-                    validation_issues.append(f"City contains invalid control characters: '{city}'")
-                if len(city.encode('utf-8')) > 80:  # Check byte length
-                    validation_issues.append(f"City too long in bytes: {len(city.encode('utf-8'))} bytes")
+                    validation_issues.append(f"City contains invalid control characters")
+                if len(city.encode('utf-8')) > 80:
+                    validation_issues.append(f"City too long: {len(city.encode('utf-8'))} bytes (max 80)")
             
-            # Log validation results
+            # If validation issues found, fail early with detailed error
             if validation_issues:
-                error_msg = f"Customer data validation failed for pill {pill.pill_number}: {'; '.join(validation_issues)}"
-                logger.error(f"❌ {error_msg}")
+                error_msg = "; ".join(validation_issues)
+                logger.error(f"❌ Customer data validation failed for pill {pill.pill_number}: {error_msg}")
                 return {
                     'success': False,
-                    'error': f'Customer data validation failed. Issues: {"; ".join(validation_issues)}'
+                    'error': f'Customer data validation failed: {error_msg}'
                 }
             
-            logger.info(f"🔍 Customer data validation:")
-            logger.info(f"  - customerName: '{customer_data.get('customerName')}' (len: {len(customer_data.get('customerName', ''))} chars, {len(customer_data.get('customerName', '').encode('utf-8'))} bytes)")
-            logger.info(f"  - Tel: '{customer_data.get('Tel')}' (len: {len(customer_data.get('Tel', ''))})")
-            logger.info(f"  - SecondaryTel: '{customer_data.get('SecondaryTel')}' (len: {len(customer_data.get('SecondaryTel', ''))})")
-            logger.info(f"  - Address1: '{customer_data.get('Address1')}' (len: {len(customer_data.get('Address1', ''))} chars, {len(customer_data.get('Address1', '').encode('utf-8'))} bytes)")
-            logger.info(f"  - City: '{customer_data.get('City')}' (len: {len(customer_data.get('City', ''))} chars, {len(customer_data.get('City', '').encode('utf-8'))} bytes)")
-            logger.info(f"  - Country: '{customer_data.get('Country')}' (len: {len(customer_data.get('Country', ''))})")
-            logger.info(f"  - customerId: '{customer_data.get('customerId')}')")
-            
-            # Comprehensive validation to prevent "corrupted customer data" and "wrong code" errors
-            validation_errors = []
-            
-            # Required field checks
-            required_fields = [
-                ('customerName', "Customer name"),
-                ('Tel', "Primary phone number"),
-                ('Address1', "Address line 1"),
-                ('City', "City/Government"),
-                ('customerId', "Customer ID")
-            ]
-            
-            for field, field_name in required_fields:
-                value = customer_data.get(field, '')
-                if not value or str(value).strip() == '':
-                    validation_errors.append(f"{field_name} is empty")
-            
-            # Phone number format validation
-            tel = customer_data.get('Tel', '')
-            if tel and not (tel.startswith('010') or tel.startswith('011') or 
-                           tel.startswith('012') or tel.startswith('015')):
-                validation_errors.append(f"Primary phone must start with 010, 011, 012, or 015. Got: {tel}")
-            
-            secondary_tel = customer_data.get('SecondaryTel', '')
-            if secondary_tel and secondary_tel != '':
-                if not (secondary_tel.startswith('010') or secondary_tel.startswith('011') or 
-                       secondary_tel.startswith('012') or secondary_tel.startswith('015')):
-                    validation_errors.append(f"Secondary phone must start with 010, 011, 012, or 015. Got: {secondary_tel}")
-            
-            # Field length validation (based on Khazenly API limits)
-            field_length_limits = [
-                ('customerName', 100, "Customer name"),
-                ('Tel', 20, "Primary phone"),
-                ('SecondaryTel', 20, "Secondary phone"),
-                ('Address1', 255, "Address line 1"),
-                ('City', 80, "City/Government"),
-                ('Country', 50, "Country")
-            ]
-            
-            for field, max_length, field_name in field_length_limits:
-                value = customer_data.get(field, '')
-                if value and len(str(value)) > max_length:
-                    validation_errors.append(f"{field_name} exceeds {max_length} characters (got {len(str(value))})")
-            
-            # Note: Removed special character validation - let Khazenly API handle character validation
-            # This allows any address format that Khazenly accepts
-            
-            # Government name validation (must match Khazenly supported cities)
-            city = customer_data.get('City', '')
-            if city:
-                # Use the same Khazenly supported cities list as in validate_order_data
-                khazenly_supported_cities = [
-                    'Alexandria', 'Assiut', 'Aswan', 'Bani-Sweif', 'Behera', 'Cairo', 
-                    'Dakahleya', 'Damietta', 'Fayoum', 'Giza', 'Hurghada', 'Ismailia', 
-                    'Luxor', 'Mahalla', 'Mansoura', 'Marsa Matrouh', 'Menya', 'Monefeya', 
-                    'North Coast', 'Port-Said', 'Qalyubia', 'Qena', 'Red Sea', 'Sharkeya', 
-                    'Sohag', 'Suez', 'Tanta', 'Zagazig', 'Gharbeya', 'Kafr El Sheikh', 
-                    'Al-Wadi Al-Gadid', 'Sharm El Sheikh', 'North Sinai', 'South Sinai'
-                ]
-                
-                # Check if city matches any Khazenly supported city with flexible matching
-                city_found = False
-                
-                # First, try exact match
-                if city in khazenly_supported_cities:
-                    city_found = True
-                else:
-                    # Try flexible matching for common variations
-                    city_normalized = city.lower().replace('-', ' ').replace('_', ' ').strip()
-                    
-                    for supported_city in khazenly_supported_cities:
-                        supported_normalized = supported_city.lower().replace('-', ' ').replace('_', ' ').strip()
-                        
-                        # Check if normalized versions match
-                        if city_normalized == supported_normalized:
-                            city_found = True
-                            break
-                        
-                        # Also check if the input contains the supported city name
-                        if supported_normalized in city_normalized or city_normalized in supported_normalized:
-                            city_found = True
-                            break
-                
-                if not city_found:
-                    available_cities = ', '.join(khazenly_supported_cities[:8]) + '...'
-                    validation_errors.append(f"City/Government '{city}' is not supported by Khazenly. Supported cities: {available_cities}")
-            
-            if validation_errors:
-                error_msg = f"Customer data validation failed: {', '.join(validation_errors)}"
-                logger.error(f"❌ {error_msg}")
-                
-                # Log detailed customer data for debugging corrupted data issues
-                logger.error(f"🚨 CORRUPTED CUSTOMER DATA PREVENTION - Detailed dump:")
-                for field, value in customer_data.items():
-                    logger.error(f"  {field}: '{value}' (type: {type(value)}, len: {len(str(value)) if value else 0})")
-                
-                return {
-                    'success': False,
-                    'error': error_msg
-                }
+            logger.info(f"✅ Customer data validation passed for pill {pill.pill_number}")
             
             # Debug logging for order structure
             logger.info(f"🔍 Order data structure created:")
             logger.info(f"  - Root keys: {list(order_data.keys())}")
             logger.info(f"  - Order keys: {list(order_data.get('Order', {}).keys())}")
             logger.info(f"  - Line items count: {len(order_data.get('lineItems', []))}")
+            
             
             # FIXED: Use correct API endpoint from Postman collection
             api_url = f"{self.base_url}/services/apexrest/api/CreateOrder"
