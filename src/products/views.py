@@ -274,6 +274,7 @@ class PillItemCreateView(generics.CreateAPIView):
             from products.models import CartSettings
             cart_settings = CartSettings.get_settings()
             max_items = cart_settings.max_items_in_cart
+            max_quantity_per_item = cart_settings.max_quantity_per_item
 
             # Check for existing item with the exact same attributes
             existing_item = PillItem.objects.filter(
@@ -287,6 +288,13 @@ class PillItemCreateView(generics.CreateAPIView):
             if existing_item:
                 # If same exact item exists, combine quantities
                 combined_quantity = existing_item.quantity + quantity
+                
+                # Validate max quantity per item
+                if combined_quantity > max_quantity_per_item:
+                    raise serializers.ValidationError({
+                        'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج. لديك حاليا {existing_item.quantity} قطعة.']
+                    })
+                
                 try:
                     temp_data = {
                         'product': product.id,
@@ -304,6 +312,12 @@ class PillItemCreateView(generics.CreateAPIView):
                 existing_item.save()
                 serializer.instance = existing_item
             else:
+                # Validate max quantity per item for new items
+                if quantity > max_quantity_per_item:
+                    raise serializers.ValidationError({
+                        'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج.']
+                    })
+                
                 # Check cart item limit for new items
                 current_cart_count = PillItem.objects.filter(
                     user=user,
@@ -341,6 +355,19 @@ class PillItemUpdateView(generics.UpdateAPIView):
             if 'quantity' in request.data and int(request.data.get('quantity', 1)) <= 0:
                 instance.delete()
                 return Response(status=status.HTTP_204_NO_CONTENT)
+            
+            # Validate max quantity per item
+            if 'quantity' in request.data:
+                from products.models import CartSettings
+                cart_settings = CartSettings.get_settings()
+                max_quantity_per_item = cart_settings.max_quantity_per_item
+                requested_quantity = int(request.data.get('quantity', 1))
+                
+                if requested_quantity > max_quantity_per_item:
+                    raise serializers.ValidationError({
+                        'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج.']
+                    })
+            
             data = request.data.copy()
             allowed_fields = ['quantity']
             data = {k: v for k, v in data.items() if k in allowed_fields}
