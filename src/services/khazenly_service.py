@@ -287,6 +287,19 @@ class KhazenlyService:
             pill_items = pill.items.all()
             logger.info(f"🔍 Processing pill {pill.pill_number}: Found {len(pill_items)} items")
             
+            # Helper function for sanitizing item names (moved outside loop for efficiency)
+            import re
+            def sanitize_item_name(text):
+                """Remove emojis and special characters from product name for Khazenly API"""
+                if not text:
+                    return ""
+                sanitized = str(text).strip()
+                # Keep Arabic characters, English letters, numbers, spaces, and basic safe punctuation
+                sanitized = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF.,\-()]+', ' ', sanitized)
+                # Clean up multiple spaces
+                sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+                return sanitized
+
             for item in pill_items:
                 product = item.product
                 original_price = float(product.price) if product.price else 0
@@ -296,7 +309,8 @@ class KhazenlyService:
                 total_product_price += discounted_price * item.quantity
                 
                 # Build detailed item description with color and size
-                item_description = product.name
+                # FIXED: Sanitize product name to remove emojis and special characters that cause Khazenly errors
+                item_description = sanitize_item_name(product.name)
                 description_parts = []
                 
                 # Add size if available
@@ -305,7 +319,7 @@ class KhazenlyService:
                 
                 # Add color if available
                 if item.color:
-                    description_parts.append(f"Color: {item.color.name}")
+                    description_parts.append(f"Color: {sanitize_item_name(item.color.name)}")
                 
                 # Combine description parts
                 if description_parts:
@@ -450,38 +464,41 @@ class KhazenlyService:
                 return phone_str
             
             # Get city and government separately for proper field mapping
-            # CRITICAL: Khazenly expects ONLY the government code in the City field
-            # The government code must match their exact list (Alexandria, Cairo, Giza, etc.)
+            # CRITICAL: Khazenly expects ONLY the government name in the City field
+            # The government name must match their exact list (Alexandria, Cairo, Giza, etc.)
             khazenly_city = ""
             
             # Map our government choices to Khazenly's expected city values
+            # FIXED: Use numeric string keys matching GOVERNMENT_CHOICES in products/models.py
+            # GOVERNMENT_CHOICES uses: ('1', 'Cairo'), ('2', 'Alexandria'), etc.
             GOVERNMENT_TO_KHAZENLY_CITY = {
-                'al': 'Alexandria',
-                'as': 'Assiut',
-                'asw': 'Aswan',
-                'bs': 'Bani-Sweif',
-                'bh': 'Behera',
-                'ca': 'Cairo',
-                'da': 'Dakahleya',
-                'dm': 'Damietta',
-                'fy': 'Fayoum',
-                'gz': 'Giza',
-                'is': 'Ismailia',
-                'ke': 'Kafr El Sheikh',
-                'lu': 'Luxor',
-                'mn': 'Menya',
-                'mf': 'Monefeya',
-                'ps': 'Port-Said',
-                'qa': 'Qalyubia',
-                'qe': 'Qena',
-                'sh': 'Sharkeya',
-                'so': 'Sohag',
-                'su': 'Suez',
-                'gh': 'Gharbeya',
-                'wa': 'Al-Wadi Al-Gadid',
-                'ns': 'North Sinai',
-                'ss': 'South Sinai',
-                'rs': 'Red Sea',
+                '1': 'Cairo',
+                '2': 'Alexandria',
+                '3': 'Kafr El Sheikh',
+                '4': 'Dakahleya',
+                '5': 'Sharkeya',
+                '6': 'Gharbeya',
+                '7': 'Monefeya',
+                '8': 'Qalyubia',
+                '9': 'Giza',
+                '10': 'Bani-Sweif',
+                '11': 'Fayoum',
+                '12': 'Menya',
+                '13': 'Assiut',
+                '14': 'Sohag',
+                '15': 'Qena',
+                '16': 'Luxor',
+                '17': 'Aswan',
+                '18': 'Red Sea',
+                '19': 'Behera',
+                '20': 'Ismailia',
+                '21': 'Suez',
+                '22': 'Port-Said',
+                '23': 'Damietta',
+                '24': 'Marsa Matrouh',
+                '25': 'Al-Wadi Al-Gadid',
+                '26': 'North Sinai',
+                '27': 'South Sinai',
             }
             
             # Get city from pilladdress

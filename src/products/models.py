@@ -1596,6 +1596,11 @@ class CartSettings(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(50)],
         help_text="Maximum number of different products that can be added to cart"
     )
+    max_quantity_per_item = models.PositiveIntegerField(
+        default=5,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Maximum quantity allowed for a single item in the cart"
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -1603,7 +1608,7 @@ class CartSettings(models.Model):
         verbose_name_plural = "Cart Settings"
 
     def __str__(self):
-        return f"Max Cart Items: {self.max_items_in_cart}"
+        return f"Max Cart Items: {self.max_items_in_cart}, Max Qty Per Item: {self.max_quantity_per_item}"
 
     @classmethod
     def get_settings(cls):
