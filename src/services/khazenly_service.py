@@ -123,7 +123,7 @@ class KhazenlyService:
                     issues.append(f"❌ Missing required order field: {field}")
             
             # Check required customer fields with detailed feedback
-            required_customer_fields = ['customerName', 'Tel', 'Address1', 'City', 'customerId']
+            required_customer_fields = ['customerName', 'Tel', 'Address1', 'City']  # NOTE: customerId removed - Khazenly auto-generates it
             for field in required_customer_fields:
                 if not customer.get(field):
                     issues.append(f"❌ Missing required customer field: {field}")
