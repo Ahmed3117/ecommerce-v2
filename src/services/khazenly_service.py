@@ -381,8 +381,8 @@ class KhazenlyService:
             # Validate and sanitize customer data
             def sanitize_text(text, max_length, field_name="field"):
                 """
-                Enhanced text sanitization for Khazenly API
-                Handles Arabic text, special characters, and encoding issues
+                Relaxed text sanitization for Khazenly API
+                Mainly removes control characters and ensures UTF-8
                 """
                 if not text:
                     return ""
@@ -390,18 +390,9 @@ class KhazenlyService:
                 # Convert to string and strip whitespace
                 sanitized = str(text).strip()
                 
-                import re
-                
-                # Keep Arabic characters, English letters, numbers, spaces, and basic safe punctuation
-                # Arabic Unicode ranges: \u0600-\u06FF (main Arabic), \u0750-\u077F (supplement)
-                # Allow: letters, numbers, Arabic characters, spaces, and safe punctuation (.,-)
-                sanitized = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF.,\-]+', ' ', sanitized)
-                
-                # Clean up multiple spaces
-                sanitized = re.sub(r'\s+', ' ', sanitized).strip()
-                
-                # Remove control characters (except basic whitespace)
-                sanitized = ''.join(char for char in sanitized if ord(char) >= 32 or char in ' \t')
+                # Remove control characters (except basic whitespace) and null bytes
+                # Keep everything else as the user requested "allow everything normally"
+                sanitized = "".join(ch for ch in sanitized if ord(ch) >= 32 or ch in "\n\r\t")
                 
                 # Ensure proper UTF-8 encoding
                 try:
@@ -420,7 +411,6 @@ class KhazenlyService:
                         if last_space > max_length * 0.8:
                             sanitized = sanitized[:last_space].strip()
                 
-                logger.info(f"✅ Sanitized {field_name}: '{sanitized}' (length: {len(sanitized)})")
                 return sanitized
             
             def validate_phone(phone):
@@ -754,20 +744,64 @@ class KhazenlyService:
                         customer = order_data.get('Customer', {})
                         logger.error(f"🚨 CORRUPTED CUSTOMER DATA DETAILS:")
                         logger.error(f"  - customerName: '{customer.get('customerName')}' (type: {type(customer.get('customerName'))}, len: {len(str(customer.get('customerName', '')))})")
-                        logger.error(f"  - Tel: '{customer.get('Tel')}' (type: {type(customer.get('Tel'))}, len: {len(str(customer.get('Tel', '')))})")
-                        logger.error(f"  - SecondaryTel: '{customer.get('SecondaryTel')}' (type: {type(customer.get('SecondaryTel'))}, len: {len(str(customer.get('SecondaryTel', '')))})")
-                        logger.error(f"  - Address1: '{customer.get('Address1')}' (type: {type(customer.get('Address1'))}, len: {len(str(customer.get('Address1', '')))})")
-                        logger.error(f"  - City: '{customer.get('City')}' (type: {type(customer.get('City'))}, len: {len(str(customer.get('City', '')))})")
-                        logger.error(f"  - Country: '{customer.get('Country')}' (type: {type(customer.get('Country'))}, len: {len(str(customer.get('Country', '')))})")
-                        logger.error(f"  - customerId: '{customer.get('customerId')}' (type: {type(customer.get('customerId'))})")
                         
-                        # Log the actual JSON that was sent to Khazenly for debugging
-                        try:
-                            customer_json = json.dumps(customer, ensure_ascii=False, indent=2)
-                            logger.error(f"🚨 CUSTOMER JSON SENT TO KHAZENLY:")
-                            logger.error(customer_json)
-                        except Exception as json_error:
-                            logger.error(f"Failed to serialize customer data: {json_error}")
+                        # RETRY STRATEGY: 
+                        # If "wrong code" or "corrupted data", it often means:
+                        # 1. The customerId format (we send USER-XXX) is rejected, they might want just XXX
+                        # 2. Or there are special characters in the address that passed relaxed sanitization but Khazenly dislikes
+                        
+                        # Only retry if we haven't retried already (check for retry flag in pill)
+                        if not getattr(pill, '_khazenly_retry_attempted', False):
+                            logger.info(f"🔄 Retrying with simplified data for pill {pill.pill_number}...")
+                            pill._khazenly_retry_attempted = True
+                            
+                            # 1. Use simple numeric ID
+                            retry_customer_id = str(pill.user.id)
+                            
+                            # 2. Use stricter sanitization for address/name just in case
+                            import re
+                            def strict_sanitize(text):
+                                if not text: return ""
+                                s = str(text).strip()
+                                # Only alphanumeric, spaces, and safe punctuation
+                                s = re.sub(r'[^\w\s\u0600-\u06FF.,\-]+', ' ', s)
+                                s = re.sub(r'\s+', ' ', s).strip()
+                                return s
+                            
+                            # Update order data for retry
+                            order_data['Customer']['customerId'] = retry_customer_id
+                            order_data['Customer']['customerName'] = strict_sanitize(order_data['Customer']['customerName'])
+                            order_data['Customer']['Address1'] = strict_sanitize(order_data['Customer']['Address1'])
+                            
+                            logger.info(f"🔄 Retry Customer ID: '{retry_customer_id}'")
+                            logger.info(f"🔄 Retry Address: '{order_data['Customer']['Address1']}'")
+                            
+                            # Recursive call or just resend request?
+                            # Resending request to avoid deep recursion loop issues
+                            try:
+                                logger.info(f"🚀 (RETRY) Sending order to Khazenly API: {api_url}")
+                                retry_response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
+                                logger.info(f"📡 (RETRY) Khazenly API response status: {retry_response.status_code}")
+                                logger.info(f"📡 (RETRY) Khazenly API response: {retry_response.text}")
+                                
+                                if retry_response.status_code == 200:
+                                    retry_data = retry_response.json()
+                                    if retry_data.get('resultCode') == 0:
+                                        order_info = retry_data.get('order', {})
+                                        logger.info(f"✓ (RETRY) Khazenly order created successfully!")
+                                        return {
+                                            'success': True,
+                                            'data': {
+                                                'khazenly_order_id': order_info.get('id'),
+                                                'sales_order_number': order_info.get('salesOrderNumber'),
+                                                'order_number': order_info.get('orderNumber'),
+                                                'line_items': retry_data.get('lineItems', []),
+                                                'customer': retry_data.get('customer', {}),
+                                                'raw_response': retry_data
+                                            }
+                                        }
+                            except Exception as retry_e:
+                                logger.error(f"❌ Retry failed: {retry_e}")
                         
                         return {
                             'success': False, 
