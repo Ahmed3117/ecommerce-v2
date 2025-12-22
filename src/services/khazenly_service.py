@@ -560,8 +560,9 @@ class KhazenlyService:
                     "Address2": "",
                     "Address3": "",
                     "City": khazenly_city,  # FIXED: Use mapped Khazenly city from government code
-                    "Country": "Egypt",
-                    "customerId": f"USER-{pill.user.id}"
+                    "Country": "Egypt"
+                    # NOTE: customerId is intentionally REMOVED - Khazenly auto-generates it from storeName + phone
+                    # Sending any customerId value causes "corrupted customer data - wrong code" error
                 },
                 "lineItems": line_items
             }
