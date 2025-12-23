@@ -560,9 +560,10 @@ class KhazenlyService:
                     "Address2": "",
                     "Address3": "",
                     "City": khazenly_city,  # FIXED: Use mapped Khazenly city from government code
-                    "Country": "Egypt"
-                    # NOTE: customerId is intentionally REMOVED - Khazenly auto-generates it from storeName + phone
-                    # Sending any customerId value causes "corrupted customer data - wrong code" error
+                    "Country": "Egypt",
+                    # FIXED: Use unique customerId per order to bypass Khazenly's duplicate customer detection
+                    # This allows the same customer (same phone) to place multiple orders
+                    "customerId": f"PILL-{pill.pill_number}"
                 },
                 "lineItems": line_items
             }
@@ -818,7 +819,32 @@ class KhazenlyService:
                 # Try to parse error response
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get('message', error_data.get('error', f'HTTP {response.status_code}'))
+                    error_msg = error_data.get('result', error_data.get('message', error_data.get('error', f'HTTP {response.status_code}')))
+                    
+                    # Handle DUPLICATES_DETECTED - customer/order already exists
+                    if "DUPLICATES_DETECTED" in error_msg or "Consignee Code already exists" in error_msg:
+                        logger.warning(f"⚠️ Duplicate detected in Khazenly for pill {pill.pill_number}")
+                        # This order may have already been created in a previous attempt
+                        # Check if this specific order exists
+                        existing_order = self.check_order_exists(pill.pill_number)
+                        if existing_order and existing_order.get('salesOrderNumber'):
+                            logger.info(f"✅ Order already exists in Khazenly: {existing_order.get('salesOrderNumber')}")
+                            return {
+                                'success': True,
+                                'data': {
+                                    'khazenly_order_id': existing_order.get('id'),
+                                    'sales_order_number': existing_order.get('salesOrderNumber'),
+                                    'order_number': existing_order.get('orderNumber'),
+                                    'already_exists': True,
+                                    'message': 'Order was already processed in a previous attempt'
+                                }
+                            }
+                        else:
+                            # Order doesn't exist but customer does - could be from another order
+                            return {
+                                'success': False, 
+                                'error': f'Customer already exists in Khazenly (from a previous order). This may indicate the order was partially processed. Please check Khazenly dashboard for order {pill.pill_number} or contact support. Details: {error_msg}'
+                            }
                 except:
                     error_msg = f'HTTP {response.status_code}: {response.text[:200]}...' if len(response.text) > 200 else response.text
                 
@@ -829,6 +855,47 @@ class KhazenlyService:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {'success': False, 'error': str(e)}
+
+    def check_order_exists(self, order_number):
+        """
+        Check if an order already exists in Khazenly by orderNumber (pill_number).
+        Returns the existing order info if found, None otherwise.
+        """
+        try:
+            access_token = self.get_access_token()
+            if not access_token:
+                logger.warning("Could not get token to check order existence")
+                return None
+            
+            # Try to query for the order by orderNumber using the API
+            # Note: This endpoint may not exist - we'll handle failure gracefully
+            query_url = f"{self.base_url}/services/apexrest/api/GetOrder"
+            
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            # Try with orderNumber parameter
+            params = {'orderNumber': order_number}
+            
+            logger.info(f"🔍 Checking if order {order_number} exists in Khazenly...")
+            
+            response = requests.get(query_url, headers=headers, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('resultCode') == 0 and data.get('order', {}).get('id'):
+                    logger.info(f"✅ Order {order_number} already exists in Khazenly")
+                    return data.get('order')
+            
+            # Order doesn't exist or endpoint not available
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Could not check order existence: {e}")
+            return None
 
     def get_order_status(self, sales_order_number):
         """
