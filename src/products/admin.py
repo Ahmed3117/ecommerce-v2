@@ -242,7 +242,7 @@ class PillAdmin(admin.ModelAdmin):
     list_filter = ['status', 'paid', 'is_shipped', 'has_stock_problem', 'is_resolved', StockProblemListFilter, FinalPriceListFilter]
     search_fields = ['pill_number', 'user__username']
     readonly_fields = ['pill_number', 'stock_problem_items']
-    list_editable = ['paid', 'status']
+    list_editable = ['paid', 'status', 'is_shipped']
     actions = ['send_to_khazenly_bulk', 'export_to_excel_for_khazenly', 'mark_stock_problems_resolved', 'check_stock_problems']
 
     def final_price_display(self, obj):
