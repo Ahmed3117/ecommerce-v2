@@ -15,12 +15,14 @@ load_dotenv(override=True)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 #^ SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY')
+# SECRET_KEY = os.getenv('SECRET_KEY')
+SECRET_KEY = SECRET_KEY = 'django-insecure-your-secret-key-here-change-in-production'
+
 
 #^ SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost','127.0.0.1','13.49.226.161','api2.bookefay.com']
+ALLOWED_HOSTS = ['localhost','127.0.0.1','13.49.226.161','api2.bookefay.com','testserver']
 
 
 #^ Application definition 
@@ -52,6 +54,9 @@ INSTALLED_APPS = [
 ]
 
 AUTH_USER_MODEL ='accounts.User'
+
+# Site name for product number generation
+ACTIVE_SITE_NAME = 'BOOKEFAY'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -86,23 +91,23 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 
 #^ DATABASES
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
 # DATABASES = {
 #     'default': {
-#         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-#         'NAME': os.getenv('DATABASE_NAME'),
-#         'USER': os.getenv('DATABASE_USER'),
-#         'PASSWORD': os.getenv('DATABASE_PASSWORD'),
-#         'HOST': 'localhost',
-#         'PORT': '5432',
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
 #     }
 # }
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'ecom_db',
+        'USER': 'ecom_user',
+        'PASSWORD': 'withALLAH',
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
+}
 
 
 #^ Password validation
@@ -260,6 +265,7 @@ KHAZENLY_CLIENT_SECRET = os.getenv('KHAZENLY_CLIENT_SECRET', '')
 KHAZENLY_STORE_NAME = os.getenv('KHAZENLY_STORE_NAME', '')
 KHAZENLY_AUTHORIZATION_CODE = os.getenv('KHAZENLY_AUTHORIZATION_CODE', '')
 KHAZENLY_REFRESH_TOKEN = os.getenv('KHAZENLY_REFRESH_TOKEN', '') 
+KHAZENLY_ORDER_USER_EMAIL = os.getenv('KHAZENLY_ORDER_USER_EMAIL', '')  # User email for orders
 
 # Khazenly Webhook Configuration
 KHAZENLY_WEBHOOK_SECRET = os.getenv('KHAZENLY_HMAC_SECRET', '')  # Updated to use the correct env var name

@@ -741,7 +741,7 @@ class KhazenlyService:
                             return {'success': False, 'error': 'One of the address fields is too long. Please shorten your address details.'}
                     elif "REQUIRED_FIELD_MISSING" in error_msg:
                         return {'success': False, 'error': 'Required field missing. Please ensure all address information is complete.'}
-                    elif "corrupted customer data" in error_msg_lower or "wrong code" in error_msg_lower:
+                    elif "corrupted customer data" in error_msg_lower or "wrong code" in error_msg_lower or "corpted" in error_msg_lower:
                         # Log detailed customer data for debugging
                         customer = order_data.get('Customer', {})
                         logger.error(f"🚨 CORRUPTED CUSTOMER DATA DETAILS:")
@@ -751,14 +751,24 @@ class KhazenlyService:
                         # If "wrong code" or "corrupted data", it often means:
                         # 1. The customerId format (we send USER-XXX) is rejected, they might want just XXX
                         # 2. Or there are special characters in the address that passed relaxed sanitization but Khazenly dislikes
+                        # 3. Or the customer ALREADY EXISTS (common cause!) and we need to use the existing customerId
                         
                         # Only retry if we haven't retried already (check for retry flag in pill)
                         if not getattr(pill, '_khazenly_retry_attempted', False):
                             logger.info(f"🔄 Retrying with simplified data for pill {pill.pill_number}...")
                             pill._khazenly_retry_attempted = True
                             
-                            # 1. Use simple numeric ID
-                            retry_customer_id = str(pill.user.id)
+                            # Try to extract existing customerId from the extracted 'customer' object in the error response
+                            # The error response typically contains: {"customer": {"customerId": "BOOKIFAY-USER-70", ...}}
+                            existing_customer_id = response_data.get('customer', {}).get('customerId')
+                            
+                            retry_customer_id = None
+                            if existing_customer_id:
+                                logger.info(f"💡 Found existing customerId in error response: '{existing_customer_id}'")
+                                retry_customer_id = existing_customer_id
+                            else:
+                                # Fallback: Use simple numeric ID
+                                retry_customer_id = str(pill.user.id)
                             
                             # 2. Use stricter sanitization for address/name just in case
                             import re
