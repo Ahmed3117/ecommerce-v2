@@ -176,7 +176,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'brand_id', 'brand_name', 'price', 'description', 'date_added', 'discounted_price',
             'has_discount', 'current_discount', 'discount_expiry', 'main_image', 'images', 'number_of_ratings',
             'average_rating', 'total_quantity', 'available_colors', 'available_sizes', 'availabilities',
-            'descriptions', 'threshold', 'is_low_stock', 'is_important','base_image'
+            'descriptions', 'threshold', 'is_low_stock', 'is_important','base_image', 'is_active'
         ]
         read_only_fields = [
             'product_number'
@@ -551,6 +551,11 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
         color = data.get('color', getattr(instance, 'color', None))
         quantity = data.get('quantity', getattr(instance, 'quantity', 1))
 
+        if product and not product.is_active:
+            raise serializers.ValidationError({
+                'product': 'لا يمكن اضافة منتج غير مفعل الى الكارد'
+            })
+
         self._validate_stock(product, size, color, quantity)
         return data
 
@@ -621,6 +626,14 @@ class PillItemSerializer(serializers.ModelSerializer):
     def get_max_quantity(self, obj):
         return self._get_max_quantity(obj.product, obj.size, obj.color)
 
+    def validate(self, data):
+        product = data.get('product')
+        if product and not product.is_active:
+            raise serializers.ValidationError({
+                'product': 'لا يمكن اضافة منتج غير مفعل الى الكارد'
+            })
+        return data
+
 
 class PillItemCreateSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
@@ -658,6 +671,14 @@ class PillItemCreateSerializer(serializers.ModelSerializer):
         
         total_available = availabilities.aggregate(total=Sum('quantity'))['total'] or 0
         return total_available
+
+    def validate(self, data):
+        product = data.get('product')
+        if product and not product.is_active:
+            raise serializers.ValidationError({
+                'product': 'لا يمكن اضافة منتج غير مفعل الى الكارد'
+            })
+        return data
 
 class AdminPillItemSerializer(PillItemCreateUpdateSerializer):
     user = serializers.PrimaryKeyRelatedField(
@@ -839,7 +860,7 @@ class PillCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Pill
-        fields = ['id', 'user', 'user_name', 'user_username','user_phone', 'user_parent_phone','items', 'status', 'date_added', 'paid']
+        fields = ['id', 'user', 'user_name', 'user_username','user_phone', 'user_parent_phone','items', 'status', 'date_added', 'paid', 'khazenly_sales_order_number']
         read_only_fields = ['id', 'status', 'date_added', 'paid']
     def get_user_name(self, obj):
         return obj.user.name
@@ -1005,12 +1026,12 @@ class PillDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id','pill_number','tracking_number', 'user_name', 'user_username', 'user_phone','user_parent_phone' ,'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
-            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
+            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
         read_only_fields = [
             'id','pill_number', 'tracking_number','user_name', 'user_username', 'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
-            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status'
+            'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
 
     def get_user_name(self, obj):
@@ -1099,7 +1120,7 @@ class PillSerializer(serializers.ModelSerializer):
             'price_without_coupons_or_gifts', 'coupon_discount', 'shipping_price', 
             'final_price', 'shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
-            'payment_gateway', 'payment_url', 'payment_status'
+            'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
         read_only_fields = [
             'id', 'pill_number', 'tracking_number', 'user_name', 'user_username', 
@@ -1108,7 +1129,7 @@ class PillSerializer(serializers.ModelSerializer):
             'gift_discount', 'price_without_coupons_or_gifts', 'coupon_discount', 
             'shipping_price', 'final_price', 'items_count','shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
-            'payment_gateway', 'payment_url', 'payment_status'
+            'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
 
     def get_user_name(self, obj):

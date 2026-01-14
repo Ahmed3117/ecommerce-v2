@@ -386,6 +386,47 @@ class EasyPayService:
                 'error': f"Unexpected error: {str(e)}"
             }
 
+    def resend_invoice_notification(self, fawry_ref):
+        """Manually trigger invoice notification resend from EasyPay"""
+        try:
+            logger.info(f"Triggering EasyPay invoice notification resend for Fawry ref: {fawry_ref}")
+            
+            url = f"https://api.easy-adds.com/api/invoice-resend-notification/"
+            
+            payload = {
+                "fawry_ref": fawry_ref,
+                "vendor_code": self.vendor_code
+            }
+            
+            response = requests.post(
+                url,
+                headers=self.headers,
+                json=payload,
+                timeout=30
+            )
+            
+            logger.info(f"EasyPay resend notification response status: {response.status_code}")
+            logger.info(f"EasyPay resend notification response: {response.text}")
+            
+            if response.status_code == 200:
+                return {
+                    'success': True,
+                    'data': response.json()
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': f"API returned status {response.status_code}: {response.text}"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error triggering EasyPay notification resend: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+
 
 # Create a singleton instance
 easypay_service = EasyPayService()

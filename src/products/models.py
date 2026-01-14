@@ -201,6 +201,10 @@ class Product(models.Model):
         null=True,
         blank=True,
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Mark if this product is active"
+    )
     
     def get_current_discount(self):
         """Returns the best active discount (either product or category level)"""

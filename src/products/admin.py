@@ -118,14 +118,14 @@ class DiscountInline(admin.TabularInline):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name','product_number' ,'type','get_base_image_preview', 'category', 'price', 'get_total_quantity', 'average_rating', 'is_important', 'date_added')
-    list_filter = ('category', 'brand', 'is_important', 'date_added')
+    list_display = ('name','product_number' ,'type','is_active','get_base_image_preview', 'category', 'price', 'get_total_quantity', 'average_rating', 'is_important', 'date_added')
+    list_filter = ('category', 'brand', 'is_important', 'date_added', 'is_active')
     search_fields = ('name', 'description')
     autocomplete_fields = ('category', 'sub_category', 'brand')
     readonly_fields = ('average_rating', 'number_of_ratings', 'get_total_quantity')
     inlines = [ProductImageInline, ProductDescriptionInline, ProductAvailabilityInline, DiscountInline]
     list_select_related = ('category', 'brand')
-    list_editable = ('type',)
+    list_editable = ('type', 'is_active')
 
     @admin.display(description='Image')
     def get_base_image_preview(self, obj):

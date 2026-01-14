@@ -14,7 +14,7 @@ class ProductFilter(filters.FilterSet):
 
     class Meta:
         model = Product
-        fields = ['category', 'sub_category', 'subject', 'teacher' ,'brand', 'has_images','is_important','type','year']
+        fields = ['category', 'sub_category', 'subject', 'teacher' ,'brand', 'has_images','is_important','type','year','is_active']
 
     def filter_by_discounted_price_min(self, queryset, name, value):
         now = timezone.now()
@@ -152,7 +152,7 @@ class PillFilter(filters.FilterSet):
 
     class Meta:
         model = Pill
-        fields = ['status', 'paid', 'user','pill_number', 'pilladdress__government', 'pilladdress__pay_method']
+        fields = ['status', 'paid', 'user','pill_number', 'pilladdress__government', 'pilladdress__pay_method', 'easypay_fawry_ref', 'shakeout_invoice_ref']
         
         
         

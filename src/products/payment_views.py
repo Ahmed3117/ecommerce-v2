@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -947,7 +947,7 @@ class CheckEasyPayInvoiceStatusView(APIView):
             if not pill.easypay_fawry_ref:
                 return Response({
                     'success': False,
-                    'error': 'This pill does not have an EasyPay Fawry reference'
+                    'error': 'هذه الفاتورة لا تمتلك رقم مرجعي لفوري (Easypay)'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             logger.info(f"Checking EasyPay status for pill {pill_id} with Fawry ref: {pill.easypay_fawry_ref}")
@@ -959,7 +959,7 @@ class CheckEasyPayInvoiceStatusView(APIView):
                 logger.error(f"EasyPay status check failed for pill {pill_id}: {result['error']}")
                 return Response({
                     'success': False,
-                    'error': result['error'],
+                    'error': f"فشل التحقق من الحالة: {result['error']}",
                     'payment_status': 'unknown'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
@@ -1003,9 +1003,63 @@ class CheckEasyPayInvoiceStatusView(APIView):
             logger.error(f"Traceback: {traceback.format_exc()}")
             return Response({
                 'success': False,
-                'error': f'Server error: {str(e)}',
+                'error': f'خطأ في الخادم: {str(e)}',
                 'payment_status': 'unknown'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class EasyPayResendNotificationView(APIView):
+    authentication_classes = [CustomJWTAuthentication]
+    permission_classes = [IsAdminUser]
+    
+    def post(self, request, pill_id):
+        """Manually trigger EasyPay notification resend for a pill"""
+        try:
+            pill = get_object_or_404(Pill, id=pill_id)
+            
+            # Check if pill is already paid
+            if pill.paid:
+                error_message = 'هذه الفاتورة مدفوعة بالفعل '
+                if pill.is_shipped:
+                    error_message = 'هذه الفاتورة مدفوعة .وتم ارسالها الى خزنلى للشحن'
+                
+                return Response({
+                    'success': False,
+                    'error': error_message,
+                    'pill_number': pill.pill_number,
+                    'status': 'already_paid'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if pill has EasyPay Fawry reference
+            if not pill.easypay_fawry_ref:
+                return Response({
+                    'success': False,
+                    'error': 'هذه الفاتورة لا تمتلك رقم مرجعي لفوري (Easypay)'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"Triggering EasyPay resend notification for pill {pill_id} with Fawry ref: {pill.easypay_fawry_ref}")
+            
+            # Use EasyPay service to trigger resend
+            result = easypay_service.resend_invoice_notification(pill.easypay_fawry_ref)
+            
+            if result['success']:
+                return Response({
+                    'success': True,
+                    'message': 'تم إعادة إرسال إشعار الدفع بنجاح',
+                    'data': result['data']
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'success': False,
+                    'error': f"فشل إعادة إرسال الإشعار: {result['error']}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+        except Exception as e:
+            logger.error(f"Error triggering EasyPay resend for pill {pill_id}: {str(e)}")
+            return Response({
+                'success': False,
+                'error': f'خطأ في الخادم: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 
@@ -1017,3 +1071,4 @@ payment_failed_view = PaymentFailedView.as_view()
 payment_pending_view = PaymentPendingView.as_view()
 check_payment_status_view = CheckPaymentStatusView.as_view()
 check_easypay_invoice_status_view = CheckEasyPayInvoiceStatusView.as_view()
+easypay_resend_notification_view = EasyPayResendNotificationView.as_view()

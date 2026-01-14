@@ -92,14 +92,14 @@ class ActiveSpecialProductsView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        return SpecialProduct.objects.filter(is_active=True).order_by('-order')
+        return SpecialProduct.objects.filter(is_active=True, product__is_active=True).order_by('-order')
     
 class ActiveBestProductsView(generics.ListAPIView):
     serializer_class = BestProductSerializer
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        return BestProduct.objects.filter(is_active=True).order_by('-order')
+        return BestProduct.objects.filter(is_active=True, product__is_active=True).order_by('-order')
 
 
 
@@ -223,6 +223,7 @@ class TeacherProductsView(APIView):
     
     def get_books(self, teacher, limit, is_important):
         queryset = Product.objects.filter(
+            is_active=True,
             teacher=teacher,
             type='book'
         )
@@ -236,6 +237,7 @@ class TeacherProductsView(APIView):
     
     def get_products(self, teacher, limit, is_important):
         queryset = Product.objects.filter(
+            is_active=True,
             teacher=teacher,
             type='product'
         )
@@ -448,6 +450,9 @@ class PillDetailView(generics.RetrieveAPIView, PillItemPermissionMixin):
 class UserPillsView(generics.ListAPIView):
     serializer_class = PillDetailSerializer
     permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, rest_filters.SearchFilter]
+    filterset_class = PillFilter
+    search_fields = ['pill_number', 'user__name', 'user__username', 'user__phone', 'user__parent_phone','easypay_fawry_ref']
 
     def get_queryset(self):
         return Pill.objects.filter(user=self.request.user).order_by('-date_added')
@@ -504,6 +509,8 @@ class ProductsWithActiveDiscountAPIView(APIView):
             category__isnull=False
         ).values_list('category_id', flat=True)
         products = Product.objects.filter(
+            is_active=True
+        ).filter(
             Q(id__in=product_discounts) | Q(category_id__in=category_discounts)
         ).distinct()
         serializer = ProductSerializer(products, many=True, context={'request': request})
@@ -591,7 +598,7 @@ class BestSellersView(generics.ListAPIView):
 
     def get_queryset(self):
         # Get products with paid/delivered items
-        queryset = Product.objects.annotate(
+        queryset = Product.objects.all().annotate(
             total_sold=Sum(
                 Case(
                     When(
@@ -644,6 +651,7 @@ class FrequentlyBoughtTogetherView(generics.ListAPIView):
         
         # Find other products in those pills
         frequent_products = Product.objects.filter(
+            is_active=True,
             pill_items__pill_id__in=pill_ids,
             pill_items__status__in=['p', 'd']
         ).exclude(
@@ -667,6 +675,8 @@ class ProductRecommendationsView(generics.ListAPIView):
         if current_product_id:
             current_product = get_object_or_404(Product, id=current_product_id)
             similar_products = Product.objects.filter(
+                is_active=True
+            ).filter(
                 Q(category=current_product.category) |
                 Q(sub_category=current_product.sub_category) |
                 Q(brand=current_product.brand) |
@@ -677,12 +687,14 @@ class ProductRecommendationsView(generics.ListAPIView):
         
         # Loved products
         loved_products = Product.objects.filter(
+            is_active=True,
             lovedproduct__user=user
         ).exclude(id__in=[p.id for p in recommendations]).distinct()
         recommendations.extend(list(loved_products))
         
         # Purchased products (using PillItem now)
         purchased_products = Product.objects.filter(
+            is_active=True,
             pill_items__user=user,
             pill_items__status__in=['p', 'd']
         ).exclude(id__in=[p.id for p in recommendations]).distinct()
