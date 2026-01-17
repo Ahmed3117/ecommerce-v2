@@ -1096,7 +1096,9 @@ class Pill(models.Model):
         if self.coupon:
             now = timezone.now()
             if self.coupon.coupon_start <= now <= self.coupon.coupon_end:
-                return self.price_without_coupons_or_gifts() * (self.coupon.discount_value / 100)
+                # Only apply discount here if it's an order discount
+                if getattr(self.coupon, 'coupon_type', 'order') == 'order':
+                    return self.price_without_coupons_or_gifts() * (self.coupon.discount_value / 100)
         return 0.0
 
     def calculate_gift_discount(self):
@@ -1144,11 +1146,39 @@ class Pill(models.Model):
             try:
                 shipping = Shipping.objects.filter(government=self.pilladdress.government).first()
                 base_shipping = shipping.shipping_price if shipping else 0.0
+                
+                # Apply shipping discount if applicable
+                if self.coupon:
+                    now = timezone.now()
+                    if self.coupon.coupon_start <= now <= self.coupon.coupon_end:
+                        if getattr(self.coupon, 'coupon_type', 'order') == 'shipping':
+                            discount_amount = base_shipping * (self.coupon.discount_value / 100)
+                            base_shipping = max(0, base_shipping - discount_amount)
+                
                 # Add over tax amount to shipping
                 return base_shipping + self.calculate_over_tax_price()
             except:
                 return 0.0
         return 0.0
+
+    def shipping_price_before_discount(self):
+        """Calculate shipping price without any coupon discounts applied."""
+        # Check if free shipping applies
+        if self.has_free_shipping_offer():
+            return self.calculate_over_tax_price()
+        
+        if hasattr(self, 'pilladdress'):
+            try:
+                shipping = Shipping.objects.filter(government=self.pilladdress.government).first()
+                base_shipping = shipping.shipping_price if shipping else 0.0
+                return base_shipping + self.calculate_over_tax_price()
+            except:
+                return 0.0
+        return 0.0
+
+    def shipping_price_after_discount(self):
+        """Alias for shipping_price() to be explicit about what it returns."""
+        return self.shipping_price()
 
     def calculate_over_tax_price(self):
         """
@@ -1368,6 +1398,18 @@ class PillStatusLog(models.Model):
     
 class CouponDiscount(models.Model):
     coupon = models.CharField(max_length=100, blank=True, null=True, editable=False)
+    
+    COUPON_TYPE_CHOICES = [
+        ('order', 'Order Total'),
+        ('shipping', 'Shipping Cost'),
+    ]
+    coupon_type = models.CharField(
+        max_length=20,
+        choices=COUPON_TYPE_CHOICES,
+        default='order',
+        help_text="Whether to apply discount to order total or shipping cost"
+    )
+    
     discount_value = models.FloatField(null=True, blank=True)
     coupon_start = models.DateTimeField(null=True, blank=True)
     coupon_end = models.DateTimeField(null=True, blank=True)

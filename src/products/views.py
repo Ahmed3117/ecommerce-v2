@@ -1496,6 +1496,17 @@ class CartSettingsView(APIView):
         serializer = CartSettingsSerializer(settings)
         return Response(serializer.data)
 
+    def post(self, request):
+        """Create Or Update cart settings"""
+        from products.models import CartSettings
+        from products.serializers import CartSettingsSerializer
+        settings = CartSettings.get_settings()
+        serializer = CartSettingsSerializer(settings, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     def patch(self, request):
         """Update cart settings"""
         from products.models import CartSettings
@@ -1504,6 +1515,32 @@ class CartSettingsView(APIView):
         serializer = CartSettingsSerializer(settings, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class OverTaxConfigView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        """Get current active over-tax config"""
+        from products.models import OverTaxConfig
+        from products.serializers import OverTaxConfigSerializer
+        config = OverTaxConfig.get_active_config()
+        if not config:
+             config = OverTaxConfig.objects.create()
+        serializer = OverTaxConfigSerializer(config)
+        return Response(serializer.data)
+
+    def post(self, request):
+        """Create or update over-tax config"""
+        from products.models import OverTaxConfig
+        from products.serializers import OverTaxConfigSerializer
+        config = OverTaxConfig.get_active_config() or OverTaxConfig()
+        serializer = OverTaxConfigSerializer(config, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save(is_active=True)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1667,6 +1704,7 @@ def resend_khazenly_orders_view(request):
     delay = request.data.get('delay', 20)
     force = request.data.get('force', False)
     dry_run = request.data.get('dry_run', False)
+
     
     try:
         # Validate parameters
