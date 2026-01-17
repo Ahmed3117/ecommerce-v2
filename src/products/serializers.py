@@ -11,7 +11,7 @@ from .models import (
     PillItem, PillStatusLog, PriceDropAlert, ProductDescription, Shipping,
     SpecialProduct, SpinWheelDiscount, SpinWheelResult, SpinWheelSettings, StockAlert,
     SubCategory, Brand, Product, ProductImage, ProductAvailability, Rating, Color, Pill, Subject, Teacher,
-    FreeShippingOffer
+    FreeShippingOffer, OverTaxConfig
 )
 
 class SubCategorySerializer(serializers.ModelSerializer):
@@ -406,22 +406,56 @@ class UserCartSerializer(serializers.ModelSerializer):
 
 class PillCouponApplySerializer(serializers.ModelSerializer):
     coupon = CouponCodeField()
+    order_price_before_discount = serializers.SerializerMethodField(source='price_without_coupons_or_gifts')
+    order_discount_amount = serializers.SerializerMethodField(source='coupon_discount')
+    order_price_after_discount = serializers.SerializerMethodField(source='price_after_coupon_discount')
+
+    coupon_type = serializers.SerializerMethodField()
+
     discount_percentage = serializers.SerializerMethodField()
-    price_after_coupon_discount = serializers.SerializerMethodField()
+
+    shipping_price_before_discount = serializers.SerializerMethodField()
+    shipping_price_after_discount = serializers.SerializerMethodField()
 
     class Meta:
         model = Pill
         fields = [
-            'id', 'coupon',
-            'price_without_coupons_or_gifts', 'coupon_discount',
-            'price_after_coupon_discount', 'final_price',
-            'discount_percentage'
+            'id', 'coupon', 'coupon_type',
+            'discount_percentage',
+            'order_price_before_discount', 'order_discount_amount',
+            'order_price_after_discount',
+            'shipping_price_before_discount', 'shipping_price_after_discount',
+            'final_price'
         ]
         read_only_fields = [
-            'id', 'price_without_coupons_or_gifts',
-            'coupon_discount', 'price_after_coupon_discount',
-            'final_price', 'discount_percentage'
+            'id', 'coupon_type', 'discount_percentage',
+            'order_price_before_discount',
+            'order_discount_amount', 'order_price_after_discount',
+            'shipping_price_before_discount', 'shipping_price_after_discount',
+            'final_price'
         ]
+
+    def get_order_price_before_discount(self, obj):
+        return obj.price_without_coupons_or_gifts()
+
+    def get_order_discount_amount(self, obj):
+        return obj.calculate_coupon_discount()
+
+    def get_order_price_after_discount(self, obj):
+        base_price = obj.price_without_coupons_or_gifts()
+        coupon_discount = obj.calculate_coupon_discount()
+        return max(0, base_price - coupon_discount)
+
+    def get_shipping_price_before_discount(self, obj):
+        return obj.shipping_price_before_discount()
+
+    def get_shipping_price_after_discount(self, obj):
+        return obj.shipping_price_after_discount()
+
+    def get_coupon_type(self, obj):
+        if obj.coupon:
+            return getattr(obj.coupon, 'coupon_type', 'order')
+        return None
 
     def validate_coupon(self, value):
         pill = self.instance
@@ -454,20 +488,31 @@ class PillCouponApplySerializer(serializers.ModelSerializer):
         return value
 
     def get_discount_percentage(self, obj):
-        base_price = obj.price_without_coupons_or_gifts()
-        if obj.coupon and base_price > 0:
-            return round((obj.calculate_coupon_discount() / base_price) * 100)
+        if not obj.coupon:
+            return 0
+        
+        # If order discount, calculate percentage of order price
+        if getattr(obj.coupon, 'coupon_type', 'order') == 'order':
+            base_price = obj.price_without_coupons_or_gifts()
+            if base_price > 0:
+                return round((obj.calculate_coupon_discount() / base_price) * 100)
+        # If shipping discount, it's just the coupon value
+        elif getattr(obj.coupon, 'coupon_type', 'order') == 'shipping':
+             return obj.coupon.discount_value
+             
         return 0
-
-    def get_price_after_coupon_discount(self, obj):
-        base_price = obj.price_without_coupons_or_gifts()
-        coupon_discount = obj.calculate_coupon_discount()
-        return max(0, base_price - coupon_discount)
 
     def update(self, instance, validated_data):
         coupon = validated_data.get('coupon')
         instance.coupon = coupon
-        instance.coupon_discount = (coupon.discount_value / 100) * instance.price_without_coupons_or_gifts()
+        
+        # Correctly calculate discount based on type
+        if getattr(coupon, 'coupon_type', 'order') == 'order':
+             instance.coupon_discount = (coupon.discount_value / 100) * instance.price_without_coupons_or_gifts()
+        else:
+             # For shipping coupons, the main 'coupon_discount' field on the Pill model (which usually stores order discount amount) should be 0
+             instance.coupon_discount = 0.0
+             
         instance.save()
         # Update coupon usage
         coupon.available_use_times -= 1
@@ -555,6 +600,29 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'product': 'لا يمكن اضافة منتج غير مفعل الى الكارد'
             })
+
+        # Validate Cart Settings
+        from products.models import CartSettings, PillItem
+        cart_settings = CartSettings.get_settings()
+        
+        # Max Quantity Per Item Check
+        if quantity > cart_settings.max_quantity_per_item:
+            raise serializers.ValidationError({
+                'quantity': f'لا يمكنك اضافة اكثر من {cart_settings.max_quantity_per_item} قطعة من نفس المنتج.'
+            })
+
+        # Max Items in Cart Check (only for new cart items)
+        if not instance:
+            user = self.context['request'].user
+            current_cart_count = PillItem.objects.filter(
+                user=user,
+                status__isnull=True
+            ).count()
+            
+            if current_cart_count >= cart_settings.max_items_in_cart:
+                raise serializers.ValidationError({
+                    'non_field_errors': f'لا يمكنك اضافة اكثر من {cart_settings.max_items_in_cart} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات'
+                })
 
         self._validate_stock(product, size, color, quantity)
         return data
@@ -670,13 +738,20 @@ class PillItemCreateSerializer(serializers.ModelSerializer):
         )
         
         total_available = availabilities.aggregate(total=Sum('quantity'))['total'] or 0
-        return total_available
-
     def validate(self, data):
         product = data.get('product')
+        quantity = data.get('quantity', 1)
         if product and not product.is_active:
             raise serializers.ValidationError({
                 'product': 'لا يمكن اضافة منتج غير مفعل الى الكارد'
+            })
+
+        # Validate Cart Settings (Max Quantity Per Item)
+        from products.models import CartSettings
+        cart_settings = CartSettings.get_settings()
+        if quantity > cart_settings.max_quantity_per_item:
+            raise serializers.ValidationError({
+                'quantity': f'لا يمكنك اضافة اكثر من {cart_settings.max_quantity_per_item} قطعة من نفس المنتج.'
             })
         return data
 
@@ -962,7 +1037,7 @@ class CouponDiscountSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CouponDiscount
-        fields = ['id', 'coupon', 'discount_value', 'coupon_start', 'coupon_end', 'available_use_times', 'is_wheel_coupon', 'user', 'min_order_value', 'is_active', 'is_available']
+        fields = ['id', 'coupon', 'discount_value', 'coupon_start', 'coupon_end', 'available_use_times', 'is_wheel_coupon', 'user', 'min_order_value', 'is_active', 'is_available', 'coupon_type']
 
     def get_is_active(self, obj):
         now = timezone.now()
@@ -1283,6 +1358,19 @@ class PriceDropAlertSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Price must be positive")
         return value
 
+class CartSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CartSettings
+        fields = ['id', 'max_items_in_cart', 'max_quantity_per_item', 'updated_at']
+        read_only_fields = ['id', 'updated_at']
+
+    def validate(self, data):
+        if data.get('max_items_in_cart', 0) > 50:
+            raise serializers.ValidationError({"max_items_in_cart": "Maximum items limit cannot exceed 50."})
+        if data.get('max_quantity_per_item', 0) > 100:
+            raise serializers.ValidationError({"max_quantity_per_item": "Maximum quantity per item cannot exceed 100."})
+        return data
+
 class SpinWheelDiscountSerializer(serializers.ModelSerializer):
     winner_count = serializers.SerializerMethodField()
 
@@ -1337,7 +1425,7 @@ class SpinWheelSettingsSerializer(serializers.ModelSerializer):
 class CartSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = CartSettings
-        fields = ['max_items_in_cart', 'updated_at']
+        fields = ['max_items_in_cart', 'max_quantity_per_item', 'updated_at']
         read_only_fields = ['updated_at']
 
     def validate_max_items_in_cart(self, value):
@@ -1345,6 +1433,30 @@ class CartSettingsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Maximum cart items must be positive.")
         if value > 50:
             raise serializers.ValidationError("Maximum cart items cannot exceed 50.")
+        return value
+
+    def validate_max_quantity_per_item(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Maximum quantity per item must be positive.")
+        if value > 100:
+            raise serializers.ValidationError("Maximum quantity per item cannot exceed 100.")
+        return value
+
+
+class OverTaxConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OverTaxConfig
+        fields = ['id', 'max_products_without_tax', 'tax_amount_per_item', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_max_products_without_tax(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Max products without tax cannot be negative.")
+        return value
+
+    def validate_tax_amount_per_item(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Tax amount per item cannot be negative.")
         return value
 
 

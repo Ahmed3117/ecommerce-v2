@@ -157,5 +157,11 @@ urlpatterns = [
     
     # Khazenly 
     path('api/resend-khazenly-orders/', views.resend_khazenly_orders_view, name='resend_khazenly_orders'),
+    
+    # Cart Settings
+    path('dashboard/cart-settings/', views.CartSettingsView.as_view(), name='cart-settings'),
+    
+    # Over Tax Settings
+    path('dashboard/over-tax-settings/', views.OverTaxConfigView.as_view(), name='over-tax-settings'),
 ]
 
