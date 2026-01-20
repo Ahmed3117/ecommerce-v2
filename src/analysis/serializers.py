@@ -2,6 +2,7 @@
 from rest_framework import serializers
 
 from products.models import Category, Product
+from accounts.models import User
 
 class ProductAnalyticsSerializer(serializers.ModelSerializer):
     # Use select_related in the view for this field for efficiency
@@ -18,6 +19,11 @@ class ProductAnalyticsSerializer(serializers.ModelSerializer):
     current_discount = serializers.FloatField(read_only=True)
     price_after_discount = serializers.FloatField(read_only=True)
     
+    # User count metrics
+    total_sales = serializers.IntegerField(read_only=True)
+    manually_assigned_sales = serializers.IntegerField(read_only=True)
+    paid_sales = serializers.IntegerField(read_only=True)
+
     # We will annotate this field in the view to avoid N+1 queries
     is_low_stock = serializers.BooleanField(read_only=True)
     
@@ -27,8 +33,36 @@ class ProductAnalyticsSerializer(serializers.ModelSerializer):
             'id', 'name', 'category_name', 'price', 'threshold', 'date_added',
             'total_available', 'total_added', 'total_sold', 'revenue', 
             'average_rating', 'total_ratings', 'has_discount', 'current_discount', 
-            'price_after_discount', 'is_low_stock'
+            'price_after_discount', 'is_low_stock',
+            'total_sales', 'manually_assigned_sales', 'paid_sales'
         ]
+
+class ProductBuyerSerializer(serializers.ModelSerializer):
+    purchase_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'username', 'year', 'purchase_type']
+
+    def get_purchase_type(self, obj):
+        # We need the product_id from the context to filter specifically for this product's purchase
+        product_id = self.context.get('product_id')
+        if not product_id:
+            return "unknown"
+            
+        # Check if they have any Manual (pill=None) purchase for this product
+        has_manual = obj.pill_items.filter(product_id=product_id, pill__isnull=True).exists()
+        
+        # Check if they have any Paid (pill!=None) purchase for this product
+        has_paid = obj.pill_items.filter(product_id=product_id, pill__isnull=False).exists()
+        
+        if has_manual and has_paid:
+            return "كلاهما"
+        elif has_manual:
+            return "اضافة يدوية"
+        elif has_paid:
+            return "شراء"
+        return "غير معروف"
 
 class CategoryAnalyticsSerializer(serializers.ModelSerializer):
     total_products = serializers.IntegerField(read_only=True)

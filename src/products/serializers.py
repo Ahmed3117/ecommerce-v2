@@ -1,5 +1,10 @@
 from rest_framework import serializers
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, APIException
+
+class ValidationMessage(APIException):
+    status_code = 400
+    default_detail = 'Validation Error'
+    default_code = 'invalid'
 from collections import defaultdict
 from urllib.parse import urljoin
 from django.utils import timezone
@@ -607,7 +612,7 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
         
         # Max Quantity Per Item Check
         if quantity > cart_settings.max_quantity_per_item:
-            raise serializers.ValidationError({
+            raise ValidationMessage({
                 'quantity': f'لا يمكنك اضافة اكثر من {cart_settings.max_quantity_per_item} قطعة من نفس المنتج.'
             })
 
@@ -620,8 +625,8 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
             ).count()
             
             if current_cart_count >= cart_settings.max_items_in_cart:
-                raise serializers.ValidationError({
-                    'non_field_errors': f'لا يمكنك اضافة اكثر من {cart_settings.max_items_in_cart} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات'
+                raise ValidationMessage({
+                    'message': f'لا يمكنك اضافة اكثر من {cart_settings.max_items_in_cart} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات'
                 })
 
         self._validate_stock(product, size, color, quantity)
@@ -641,11 +646,8 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
 
         if not availabilities.exists():
             color_name = color.name if color else 'N/A'
-            raise serializers.ValidationError({
-                'non_field_errors': [
-                    f"The selected variant (Size: {size or 'N/A'}, Color: {color_name}) "
-                    f"is not available for {product.name}."
-                ]
+            raise ValidationMessage({
+                'message': f"The selected variant (Size: {size or 'N/A'}, Color: {color_name}) is not available for {product.name}."
             })
 
         total_available = availabilities.aggregate(total=Sum('quantity'))['total'] or 0
@@ -1038,6 +1040,23 @@ class CouponDiscountSerializer(serializers.ModelSerializer):
     class Meta:
         model = CouponDiscount
         fields = ['id', 'coupon', 'discount_value', 'coupon_start', 'coupon_end', 'available_use_times', 'is_wheel_coupon', 'user', 'min_order_value', 'is_active', 'is_available', 'coupon_type']
+        extra_kwargs = {
+            'coupon': {
+                'required': False, 
+                'allow_null': True, 
+                'allow_blank': True,
+                'validators': [] 
+            }
+        }
+
+    def validate_coupon(self, value):
+        if value:
+            qs = CouponDiscount.objects.filter(coupon=value)
+            if self.instance:
+                qs = qs.exclude(id=self.instance.id)
+            if qs.exists():
+                raise ValidationMessage({'message': f"Coupon code '{value}' already exists."})
+        return value
 
     def get_is_active(self, obj):
         now = timezone.now()

@@ -1,9 +1,10 @@
 from django.urls import path
-from .views import CustomerActivityView, DashboardAnalyticsView, OrderAnalysisView, ProductInventoryView, ProductPerformanceView, CategoryPerformanceView, SalesDashboardView, StoreAnalyticsView
+from .views import CustomerActivityView, DashboardAnalyticsView, OrderAnalysisView, ProductInventoryView, ProductPerformanceView, CategoryPerformanceView, SalesDashboardView, StoreAnalyticsView, ProductBuyersView
 
 
 urlpatterns = [
     path('products/', ProductPerformanceView.as_view(), name='product-analytics'),
+    path('products/<int:pk>/buyers/', ProductBuyersView.as_view(), name='product-buyers'),
     path('categories/', CategoryPerformanceView.as_view(), name='category-analytics'),
     # Sales Analysis
     path('sales-dashboard/', SalesDashboardView.as_view(), name='sales-dashboard'),
