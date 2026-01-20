@@ -86,10 +86,7 @@ def generate_pill_number():
             return pill_number
 
 def create_random_coupon():
-    letters = string.ascii_lowercase
-    nums = ['0', '2', '3', '4', '5', '6', '7', '8', '9']
-    marks = ['@', '#', '$', '%', '&', '*']
-    return '-'.join(random.choice(letters) + random.choice(nums) + random.choice(marks) for _ in range(5))
+    return ''.join(random.choice(string.digits) for _ in range(10))
 
 class Category(models.Model):
     product_type = [
@@ -1397,7 +1394,7 @@ class PillStatusLog(models.Model):
         return f"{self.pill.id} - {self.get_status_display()} at {self.changed_at}"
     
 class CouponDiscount(models.Model):
-    coupon = models.CharField(max_length=100, blank=True, null=True, editable=False)
+    coupon = models.CharField(max_length=100, blank=True, null=True, unique=True)
     
     COUPON_TYPE_CHOICES = [
         ('order', 'Order Total'),

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from django.db.models.functions import Coalesce
 from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, TruncYear,TruncDate
 from accounts.models import GOVERNMENT_CHOICES, User
+from accounts.pagination import CustomPageNumberPagination
 from analysis.serializers import CategoryAnalyticsSerializer, InventoryAlertSerializer, ProductAnalyticsSerializer, SalesTrendSerializer
 from products.models import PILL_STATUS_CHOICES, Category, Discount, LovedProduct, Pill, PillAddress, PillItem, Product, ProductAvailability, Rating, SpecialProduct
 from rest_framework import generics, filters
@@ -64,7 +65,7 @@ class ProductPerformanceView(generics.ListAPIView):
     serializer_class = ProductAnalyticsSerializer
     filter_backends = [django_filters.DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
     filterset_class = ProductAnalyticsFilter
-    ordering_fields = ['total_sold', 'revenue', 'average_rating', 'total_available', 'price', 'name']
+    ordering_fields = ['total_sold', 'revenue', 'average_rating', 'total_available', 'price', 'name', 'total_sales', 'manually_assigned_sales', 'paid_sales']
     search_fields = ['name']
     
     def get_queryset(self):
@@ -131,6 +132,17 @@ class ProductPerformanceView(generics.ListAPIView):
         )
 
         # --- Main Annotation ---
+        # 6. User Sales counts (Distinct Users)
+        # total_sales: All pill items (linked to an order or not)
+        total_sales_count = Count('pill_items__user', distinct=True)
+        
+        # manually_assigned_sales: Pill items where pill is NULL
+        manually_assigned_sales_count = Count('pill_items__user', filter=Q(pill_items__pill__isnull=True), distinct=True)
+        
+        # paid_sales: Pill items where pill is NOT NULL
+        paid_sales_count = Count('pill_items__user', filter=Q(pill_items__pill__isnull=False), distinct=True)
+
+        # --- Main Annotation ---
         queryset = base_queryset.annotate(
             total_available=Coalesce(avail_sq, 0, output_field=IntegerField()),
             total_added=Coalesce(added_sq, 0, output_field=IntegerField()),
@@ -139,6 +151,9 @@ class ProductPerformanceView(generics.ListAPIView):
             average_rating=Coalesce(avg_rating_sq, 0.0, output_field=FloatField()),
             total_ratings=Coalesce(total_ratings_sq, 0, output_field=IntegerField()),
             current_discount=Coalesce(current_discount_sq, 0.0, output_field=FloatField()),
+            total_sales=total_sales_count,
+            manually_assigned_sales=manually_assigned_sales_count,
+            paid_sales=paid_sales_count
         ).annotate(
             price_after_discount=Case(
                 When(current_discount__gt=0, then=F('price') * (1 - F('current_discount') / 100.0)),
@@ -157,6 +172,7 @@ class ProductPerformanceView(generics.ListAPIView):
             )
         )
 
+        
         # Apply final filter for low stock threshold if requested
         if low_stock_threshold is not None:
             try:
@@ -165,7 +181,79 @@ class ProductPerformanceView(generics.ListAPIView):
             except (ValueError, TypeError):
                 pass
         
+        # Default ordering by total_sales descending IF no other ordering is specified
+        if not self.request.query_params.get('ordering'):
+            queryset = queryset.order_by('-total_sales')
+            
         return queryset
+
+
+class ProductBuyerFilter(django_filters.FilterSet):
+    purchase_type = django_filters.CharFilter(method='filter_purchase_type')
+    
+    class Meta:
+        model = User
+        fields = ['year']
+
+    def filter_purchase_type(self, queryset, name, value):
+        # Access the view instance from the parent filterset
+        view = getattr(self, 'view', None) or getattr(self.request, 'parser_context', {}).get('view')
+        product_id = view.kwargs.get('pk') if view else None
+        if not product_id:
+            return queryset
+            
+        value = str(value).strip()
+        
+        # Get user IDs who have paid purchases for this product
+        paid_user_ids = set(User.objects.filter(
+            pill_items__product_id=product_id,
+            pill_items__pill__isnull=False
+        ).values_list('id', flat=True).distinct())
+        
+        # Get user IDs who have manual assignments for this product
+        manual_user_ids = set(User.objects.filter(
+            pill_items__product_id=product_id,
+            pill_items__pill__isnull=True
+        ).values_list('id', flat=True).distinct())
+        
+        # 'paid' / 'شراء' -> ONLY paid (not manual)
+        if value in ['paid', 'شراء']:
+            only_paid_ids = paid_user_ids - manual_user_ids
+            return queryset.filter(id__in=only_paid_ids)
+        
+        # 'manual' / 'اضافة يدوية' -> ONLY manual (not paid)
+        elif value in ['manual', 'اضافة يدوية']:
+            only_manual_ids = manual_user_ids - paid_user_ids
+            return queryset.filter(id__in=only_manual_ids)
+        
+        # 'both' / 'كلاهما' -> Has BOTH
+        elif value in ['both', 'كلاهما']:
+            both_ids = paid_user_ids & manual_user_ids
+            return queryset.filter(id__in=both_ids)
+        
+        return queryset
+
+class ProductBuyersView(generics.ListAPIView):
+    """
+    Get all users who bought a specific product.
+    Supports filtering by year and searching by name/username.
+    """
+    from analysis.serializers import ProductBuyerSerializer
+    serializer_class = ProductBuyerSerializer
+    pagination_class = CustomPageNumberPagination
+    filter_backends = [filters.SearchFilter, django_filters.DjangoFilterBackend]
+    search_fields = ['name', 'username']
+    filterset_class = ProductBuyerFilter
+
+    def get_queryset(self):
+        product_id = self.kwargs.get('pk')
+        # distinct() is crucial here because one user might have bought the product multiple times
+        return User.objects.filter(pill_items__product_id=product_id).distinct()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['product_id'] = self.kwargs.get('pk')
+        return context
 
 
 class CategoryPerformanceView(generics.ListAPIView):

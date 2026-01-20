@@ -118,7 +118,7 @@ class CouponDiscountFilter(filters.FilterSet):
 
     class Meta:
         model = CouponDiscount
-        fields = ['available']
+        fields = ['available', 'coupon_type']
 
     def filter_available(self, queryset, name, value):
         now = timezone.now()
