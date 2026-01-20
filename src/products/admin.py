@@ -1029,7 +1029,21 @@ class KhazenlyWebhookLogAdmin(admin.ModelAdmin):
 
 admin.site.register(ProductImage)
 admin.site.register(ProductDescription)
-admin.site.register(PillItem)
+@admin.register(PillItem)
+class PillItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'product', 'user', 'quantity', 'status', 'price_at_sale', 'date_added', 'date_sold', 'get_pill_number']
+    list_filter = ['status', 'date_added', 'date_sold', 'size', 'color']
+    search_fields = ['product__name', 'user__username', 'user__email', 'pill__pill_number']
+    autocomplete_fields = ['product', 'user', 'pill']
+    readonly_fields = ['date_added', 'date_sold']
+    date_hierarchy = 'date_added'
+
+    @admin.display(description='Pill Number', ordering='pill__pill_number')
+    def get_pill_number(self, obj):
+        return obj.pill.pill_number if obj.pill else '-'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('product', 'user', 'pill', 'color')
 # admin.site.register(PillAddress)
 admin.site.register(PillStatusLog)
 admin.site.register(PriceDropAlert)

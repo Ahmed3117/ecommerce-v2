@@ -181,71 +181,34 @@ class ProductPerformanceView(generics.ListAPIView):
         return queryset
 
 class ProductBuyerFilter(django_filters.FilterSet):
-    purchase_type = django_filters.CharFilter(method='filter_purchase_type')
-    
     class Meta:
         model = User
         fields = ['year']
 
-    def filter_purchase_type(self, queryset, name, value):
-        # Access the view instance from the parent filterset
-        view = getattr(self, 'view', None) or getattr(self.request, 'parser_context', {}).get('view')
-        product_id = view.kwargs.get('pk') if view else None
-        if not product_id:
-            return queryset
-            
-        value = str(value).strip()
-        
-        # Get user IDs who have paid purchases for this product
-        paid_user_ids = set(User.objects.filter(
-            pill_items__product_id=product_id,
-            pill_items__pill__isnull=False
-        ).values_list('id', flat=True).distinct())
-        
-        # Get user IDs who have manual assignments for this product
-        manual_user_ids = set(User.objects.filter(
-            pill_items__product_id=product_id,
-            pill_items__pill__isnull=True
-        ).values_list('id', flat=True).distinct())
-        
-        # 'paid' / 'شراء' -> ONLY paid (not manual)
-        if value in ['paid', 'شراء']:
-            only_paid_ids = paid_user_ids - manual_user_ids
-            return queryset.filter(id__in=only_paid_ids)
-        
-        # 'manual' / 'اضافة يدوية' -> ONLY manual (not paid)
-        elif value in ['manual', 'اضافة يدوية']:
-            only_manual_ids = manual_user_ids - paid_user_ids
-            return queryset.filter(id__in=only_manual_ids)
-        
-        # 'both' / 'كلاهما' -> Has BOTH
-        elif value in ['both', 'كلاهما']:
-            both_ids = paid_user_ids & manual_user_ids
-            return queryset.filter(id__in=both_ids)
-        
-        return queryset
-
 class ProductBuyersView(generics.ListAPIView):
     """
-    Get all users who bought a specific product.
+    Get all users who bought a specific product (paid buyers only).
+    A buyer is a user with a PillItem for this product where status is not 'i' or 'w'.
     Supports filtering by year and searching by name/username.
     """
     from analysis.serializers import ProductBuyerSerializer
     serializer_class = ProductBuyerSerializer
-    # pagination_class = CustomPageNumberPagination
     filter_backends = [filters.SearchFilter, django_filters.DjangoFilterBackend]
     search_fields = ['name', 'username']
     filterset_class = ProductBuyerFilter
 
     def get_queryset(self):
         product_id = self.kwargs.get('pk')
-        # distinct() is crucial here because one user might have bought the product multiple times
-        return User.objects.filter(pill_items__product_id=product_id).distinct()
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['product_id'] = self.kwargs.get('pk')
-        return context
+        
+        # A buyer is a user who has at least one PillItem for this product 
+        # where the status is 'paid' (not in ['i', 'w'] and not None)
+        queryset = User.objects.filter(
+            Q(pill_items__product_id=product_id) & 
+            Q(pill_items__status__isnull=False) & 
+            ~Q(pill_items__status__in=['i', 'w'])
+        ).only('id', 'name', 'username', 'year').distinct()
+        
+        return queryset
 
 
 class CategoryPerformanceView(generics.ListAPIView):
