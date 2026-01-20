@@ -65,95 +65,93 @@ class ProductPerformanceView(generics.ListAPIView):
     serializer_class = ProductAnalyticsSerializer
     filter_backends = [django_filters.DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
     filterset_class = ProductAnalyticsFilter
-    ordering_fields = ['total_sold', 'revenue', 'average_rating', 'total_available', 'price', 'name', 'total_sales', 'manually_assigned_sales', 'paid_sales']
+    ordering_fields = ['total_sold', 'revenue', 'average_rating', 'total_available', 'price', 'name']
     search_fields = ['name']
+    #pagination_class = CustomPageNumberPagination  # Add pagination for large datasets
     
     def get_queryset(self):
-        # Use select_related for efficiency in the serializer (e.g., category.name)
-        base_queryset = Product.objects.select_related('category', 'brand')
-
+        # Parse date parameters once
         start_date_str = self.request.query_params.get('start_date')
         end_date_str = self.request.query_params.get('end_date')
         low_stock_threshold = self.request.query_params.get('low_stock_threshold')
-
-        # --- Subquery Definitions ---
-
-        # 1. Subquery for total available stock
-        avail_sq = Subquery(
-            ProductAvailability.objects.filter(
+        
+        parsed_start = parse_date(start_date_str) if start_date_str else None
+        parsed_end = parse_date(end_date_str) if end_date_str else None
+        
+        # Build date filter once for reuse
+        has_date_filter = parsed_start and parsed_end
+        end_of_day_exclusive = parsed_end + timedelta(days=1) if parsed_end else None
+        
+        # --- 1. Subquery for total available stock ---
+        avail_sq = ProductAvailability.objects.filter(
+            product=OuterRef('pk')
+        ).values('product').annotate(total=Sum('quantity')).values('total')[:1]
+        
+        # --- 2. Subquery for stock added (only if date filter specified) ---
+        if has_date_filter:
+            added_sq = ProductAvailability.objects.filter(
+                product=OuterRef('pk'),
+                date_added__gte=parsed_start,
+                date_added__lt=end_of_day_exclusive
+            ).values('product').annotate(total=Sum('quantity')).values('total')[:1]
+        else:
+            added_sq = ProductAvailability.objects.filter(
                 product=OuterRef('pk')
-            ).values('product').annotate(total=Sum('quantity')).values('total')
-        )
+            ).values('product').annotate(total=Sum('quantity')).values('total')[:1]
 
-        # 2. Subquery for stock added within a date range
-        added_filter = Q(product=OuterRef('pk'))
-        if start_date_str and end_date_str:
-            parsed_start = parse_date(start_date_str)
-            parsed_end = parse_date(end_date_str)
-            if parsed_start and parsed_end:
-                end_of_day_exclusive = parsed_end + timedelta(days=1)
-                added_filter &= Q(date_added__gte=parsed_start, date_added__lt=end_of_day_exclusive)
+        # --- 3. Sales subqueries with combined filter ---
+        sales_base_filter = {'product': OuterRef('pk'), 'status__in': ['p', 'd']}
+        if has_date_filter:
+            sales_base_qs = PillItem.objects.filter(
+                product=OuterRef('pk'),
+                status__in=['p', 'd'],
+                date_sold__gte=parsed_start,
+                date_sold__lt=end_of_day_exclusive
+            )
+        else:
+            sales_base_qs = PillItem.objects.filter(
+                product=OuterRef('pk'),
+                status__in=['p', 'd']
+            )
         
-        added_sq = Subquery(
-            ProductAvailability.objects.filter(added_filter)
-            .values('product').annotate(total=Sum('quantity')).values('total')
-        )
-
-        # 3. Subquery for sales and revenue with correct date handling
-        sales_filter = Q(product=OuterRef('pk'), status__in=['p', 'd'])
-        if start_date_str and end_date_str:
-            parsed_start = parse_date(start_date_str)
-            parsed_end = parse_date(end_date_str)
-            if parsed_start and parsed_end:
-                end_of_day_exclusive = parsed_end + timedelta(days=1)
-                sales_filter &= Q(date_sold__gte=parsed_start, date_sold__lt=end_of_day_exclusive)
-
-        sold_items_sq = PillItem.objects.filter(sales_filter).values('product')
+        total_sold_sq = sales_base_qs.values('product').annotate(
+            total=Sum('quantity')
+        ).values('total')[:1]
         
-        total_sold_sq = sold_items_sq.annotate(total=Sum('quantity')).values('total')
-        revenue_sq = sold_items_sq.annotate(
+        revenue_sq = sales_base_qs.values('product').annotate(
             total=Sum(F('quantity') * F('price_at_sale'))
-        ).values('total')
+        ).values('total')[:1]
         
-        # 4. Subqueries for ratings
-        ratings_sq = Rating.objects.filter(product=OuterRef('pk')).values('product')
-        avg_rating_sq = ratings_sq.annotate(avg=Avg('star_number')).values('avg')
-        total_ratings_sq = ratings_sq.annotate(count=Count('id')).values('count')
+        # --- 4. Single combined rating subquery ---
+        avg_rating_sq = Rating.objects.filter(
+            product=OuterRef('pk')
+        ).values('product').annotate(avg=Avg('star_number')).values('avg')[:1]
+        
+        total_ratings_sq = Rating.objects.filter(
+            product=OuterRef('pk')
+        ).values('product').annotate(count=Count('id')).values('count')[:1]
 
-        # 5. Subquery for current discount
+        # --- 5. Current discount subquery (optimized with limit) ---
         now = timezone.now()
-        current_discount_sq = Subquery(
-            Discount.objects.filter(
-                (Q(product=OuterRef('pk')) | Q(category=OuterRef('category'))),
-                discount_start__lte=now,
-                discount_end__gte=now,
-                is_active=True
-            ).order_by('-discount').values('discount')[:1] # Get the best discount
-        )
+        current_discount_sq = Discount.objects.filter(
+            Q(product=OuterRef('pk')) | Q(category=OuterRef('category')),
+            discount_start__lte=now,
+            discount_end__gte=now,
+            is_active=True
+        ).order_by('-discount').values('discount')[:1]
 
-        # --- Main Annotation ---
-        # 6. User Sales counts (Distinct Users)
-        # total_sales: All pill items (linked to an order or not)
-        total_sales_count = Count('pill_items__user', distinct=True)
-        
-        # manually_assigned_sales: Pill items where pill is NULL
-        manually_assigned_sales_count = Count('pill_items__user', filter=Q(pill_items__pill__isnull=True), distinct=True)
-        
-        # paid_sales: Pill items where pill is NOT NULL
-        paid_sales_count = Count('pill_items__user', filter=Q(pill_items__pill__isnull=False), distinct=True)
-
-        # --- Main Annotation ---
-        queryset = base_queryset.annotate(
-            total_available=Coalesce(avail_sq, 0, output_field=IntegerField()),
-            total_added=Coalesce(added_sq, 0, output_field=IntegerField()),
-            total_sold=Coalesce(total_sold_sq, 0, output_field=IntegerField()),
-            revenue=Coalesce(revenue_sq, 0.0, output_field=FloatField()),
-            average_rating=Coalesce(avg_rating_sq, 0.0, output_field=FloatField()),
-            total_ratings=Coalesce(total_ratings_sq, 0, output_field=IntegerField()),
-            current_discount=Coalesce(current_discount_sq, 0.0, output_field=FloatField()),
-            total_sales=total_sales_count,
-            manually_assigned_sales=manually_assigned_sales_count,
-            paid_sales=paid_sales_count
+        # --- Main Query with all annotations in a single pass ---
+        queryset = Product.objects.select_related('category', 'brand').only(
+            'id', 'name', 'price', 'threshold', 'date_added',
+            'category__id', 'category__name', 'brand__id', 'brand__name'
+        ).annotate(
+            total_available=Coalesce(Subquery(avail_sq), 0, output_field=IntegerField()),
+            total_added=Coalesce(Subquery(added_sq), 0, output_field=IntegerField()),
+            total_sold=Coalesce(Subquery(total_sold_sq), 0, output_field=IntegerField()),
+            revenue=Coalesce(Subquery(revenue_sq), 0.0, output_field=FloatField()),
+            average_rating=Coalesce(Subquery(avg_rating_sq), 0.0, output_field=FloatField()),
+            total_ratings=Coalesce(Subquery(total_ratings_sq), 0, output_field=IntegerField()),
+            current_discount=Coalesce(Subquery(current_discount_sq), 0.0, output_field=FloatField()),
         ).annotate(
             price_after_discount=Case(
                 When(current_discount__gt=0, then=F('price') * (1 - F('current_discount') / 100.0)),
@@ -172,8 +170,7 @@ class ProductPerformanceView(generics.ListAPIView):
             )
         )
 
-        
-        # Apply final filter for low stock threshold if requested
+        # Apply low stock threshold filter if requested
         if low_stock_threshold is not None:
             try:
                 threshold_val = int(low_stock_threshold)
@@ -181,12 +178,7 @@ class ProductPerformanceView(generics.ListAPIView):
             except (ValueError, TypeError):
                 pass
         
-        # Default ordering by total_sales descending IF no other ordering is specified
-        if not self.request.query_params.get('ordering'):
-            queryset = queryset.order_by('-total_sales')
-            
         return queryset
-
 
 class ProductBuyerFilter(django_filters.FilterSet):
     purchase_type = django_filters.CharFilter(method='filter_purchase_type')
@@ -240,7 +232,7 @@ class ProductBuyersView(generics.ListAPIView):
     """
     from analysis.serializers import ProductBuyerSerializer
     serializer_class = ProductBuyerSerializer
-    pagination_class = CustomPageNumberPagination
+    # pagination_class = CustomPageNumberPagination
     filter_backends = [filters.SearchFilter, django_filters.DjangoFilterBackend]
     search_fields = ['name', 'username']
     filterset_class = ProductBuyerFilter
