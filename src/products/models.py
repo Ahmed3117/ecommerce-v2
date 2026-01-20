@@ -423,7 +423,11 @@ class ProductAvailability(models.Model):
 
     class Meta:
         unique_together = ['product', 'size', 'color']
-        ordering = ['-date_added'] 
+        ordering = ['-date_added']
+        indexes = [
+            models.Index(fields=['product', 'date_added']),
+            models.Index(fields=['product']),
+        ]
 
     def __str__(self):
         return f"{self.product.name} - {self.size} - {self.color.name if self.color else 'No Color'}"
@@ -1448,7 +1452,10 @@ class Rating(models.Model):
         return range(int(self.star_number)), range(5 - int(self.star_number))
 
     class Meta:
-        ordering = ['-date_added'] 
+        ordering = ['-date_added']
+        indexes = [
+            models.Index(fields=['product']),
+        ]
 
 class Discount(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, null=True, blank=True, related_name='discounts')
@@ -1461,6 +1468,10 @@ class Discount(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['product', 'is_active', 'discount_start', 'discount_end']),
+            models.Index(fields=['category', 'is_active', 'discount_start', 'discount_end']),
+        ]
 
     def __str__(self):
         target = f"Product: {self.product.name}" if self.product else f"Category: {self.category.name}"

@@ -18,11 +18,6 @@ class ProductAnalyticsSerializer(serializers.ModelSerializer):
     has_discount = serializers.BooleanField(read_only=True)
     current_discount = serializers.FloatField(read_only=True)
     price_after_discount = serializers.FloatField(read_only=True)
-    
-    # User count metrics
-    total_sales = serializers.IntegerField(read_only=True)
-    manually_assigned_sales = serializers.IntegerField(read_only=True)
-    paid_sales = serializers.IntegerField(read_only=True)
 
     # We will annotate this field in the view to avoid N+1 queries
     is_low_stock = serializers.BooleanField(read_only=True)
@@ -33,8 +28,7 @@ class ProductAnalyticsSerializer(serializers.ModelSerializer):
             'id', 'name', 'category_name', 'price', 'threshold', 'date_added',
             'total_available', 'total_added', 'total_sold', 'revenue', 
             'average_rating', 'total_ratings', 'has_discount', 'current_discount', 
-            'price_after_discount', 'is_low_stock',
-            'total_sales', 'manually_assigned_sales', 'paid_sales'
+            'price_after_discount', 'is_low_stock'
         ]
 
 class ProductBuyerSerializer(serializers.ModelSerializer):
