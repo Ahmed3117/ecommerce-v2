@@ -812,75 +812,57 @@ class KhazenlyService:
                         customer = order_data.get('Customer', {})
                         logger.error(f"🚨 CORRUPTED CUSTOMER DATA DETAILS:")
                         logger.error(f"  - customerName: '{customer.get('customerName')}' (type: {type(customer.get('customerName'))}, len: {len(str(customer.get('customerName', '')))})")
+                        logger.error(f"  - Tel: '{customer.get('Tel')}'")
+                        logger.error(f"  - SecondaryTel: '{customer.get('SecondaryTel')}'")
                         
-                        # RETRY STRATEGY: 
-                        # If "wrong code" or "corrupted data", it often means:
-                        # 1. The customerId format (we send USER-XXX) is rejected, they might want just XXX
-                        # 2. Or there are special characters in the address that passed relaxed sanitization but Khazenly dislikes
-                        # 3. Or the customer ALREADY EXISTS (common cause!) and we need to use the existing customerId
+                        # ENHANCED RETRY STRATEGY WITH PHONE SWAP:
+                        # The "corrupted customer data / wrong code" error often means:
+                        # 1. The phone number is linked to a CORRUPTED customer record in Khazenly
+                        # 2. Every order with that phone will fail until Khazenly fixes their record
+                        # 3. SOLUTION: Try using the secondary phone as primary to bypass the corrupted customer
                         
-                        # Only retry if we haven't retried already (check for retry flag in pill)
-                        if not getattr(pill, '_khazenly_retry_attempted', False):
-                            logger.info(f"🔄 Retrying with simplified data for pill {pill.pill_number}...")
-                            pill._khazenly_retry_attempted = True
+                        original_primary_tel = customer.get('Tel', '')
+                        original_secondary_tel = customer.get('SecondaryTel', '')
+                        
+                        # Retry 1: Clear secondary phone, keep primary
+                        retry_count = getattr(pill, '_khazenly_retry_count', 0)
+                        
+                        if retry_count == 0:
+                            logger.info(f"🔄 RETRY 1: Clearing SecondaryTel for pill {pill.pill_number}...")
+                            pill._khazenly_retry_count = 1
                             
-                            # Try to extract existing customerId from the extracted 'customer' object in the error response
-                            # The error response typically contains: {"customer": {"customerId": "BOOKIFAY-USER-70", ...}}
-                            existing_customer_id = response_data.get('customer', {}).get('customerId')
-                            
-                            retry_customer_id = None
-                            if existing_customer_id:
-                                logger.info(f"💡 Found existing customerId in error response: '{existing_customer_id}'")
-                                retry_customer_id = existing_customer_id
-                            else:
-                                # Fallback: Use simple numeric ID
-                                retry_customer_id = str(pill.user.id)
-                            
-                            # 2. Use stricter sanitization for address/name just in case
+                            # Use stricter sanitization
                             import re
                             import unicodedata
                             
                             def strict_sanitize(text):
                                 if not text: return ""
                                 s = str(text).strip()
-                                # Normalize Unicode first
                                 s = unicodedata.normalize('NFC', s)
-                                # Remove zero-width characters
                                 s = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\ufffe]+', '', s)
-                                # Only alphanumeric, spaces, and safe punctuation + Arabic
                                 s = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F.,\-()]+', ' ', s)
                                 s = re.sub(r'\s+', ' ', s).strip()
                                 return s
                             
-                            # Update order data for retry
-                            order_data['Customer']['customerId'] = retry_customer_id
+                            order_data['Customer']['SecondaryTel'] = ""
                             order_data['Customer']['customerName'] = strict_sanitize(order_data['Customer']['customerName'])
                             order_data['Customer']['Address1'] = strict_sanitize(order_data['Customer']['Address1'])
                             
-                            # FIXED: Clear SecondaryTel on retry - it's a common cause of "wrong code" errors
-                            # If the primary phone was invalid it would have returned empty string from validation
-                            # So the issue might be the secondary phone causing problems
-                            order_data['Customer']['SecondaryTel'] = ""
-                            logger.info(f"🔄 Clearing SecondaryTel on retry to eliminate it as error source")
+                            # Update orderId to avoid duplicate
+                            order_data['Order']['orderId'] = f"{pill.pill_number}-{int(timezone.now().timestamp())}-r1"
                             
-                            logger.info(f"🔄 Retry Customer ID: '{retry_customer_id}'")
-                            logger.info(f"🔄 Retry Customer Name: '{order_data['Customer']['customerName']}'")
-                            logger.info(f"🔄 Retry Address: '{order_data['Customer']['Address1']}'")
-                            logger.info(f"🔄 Retry Primary Tel: '{order_data['Customer']['Tel']}'")
+                            logger.info(f"🔄 Retry 1 - Primary Tel: '{order_data['Customer']['Tel']}'")
+                            logger.info(f"🔄 Retry 1 - SecondaryTel: '' (cleared)")
                             
-                            # Recursive call or just resend request?
-                            # Resending request to avoid deep recursion loop issues
                             try:
-                                logger.info(f"🚀 (RETRY) Sending order to Khazenly API: {api_url}")
                                 retry_response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
-                                logger.info(f"📡 (RETRY) Khazenly API response status: {retry_response.status_code}")
-                                logger.info(f"📡 (RETRY) Khazenly API response: {retry_response.text}")
+                                logger.info(f"📡 (RETRY 1) Response status: {retry_response.status_code}")
                                 
                                 if retry_response.status_code == 200:
                                     retry_data = retry_response.json()
                                     if retry_data.get('resultCode') == 0:
                                         order_info = retry_data.get('order', {})
-                                        logger.info(f"✓ (RETRY) Khazenly order created successfully!")
+                                        logger.info(f"✓ (RETRY 1) Khazenly order created successfully!")
                                         return {
                                             'success': True,
                                             'data': {
@@ -892,13 +874,71 @@ class KhazenlyService:
                                                 'raw_response': retry_data
                                             }
                                         }
+                                    else:
+                                        # Retry 1 failed, continue to Retry 2 with phone swap
+                                        logger.warning(f"⚠️ RETRY 1 failed: {retry_data.get('result')}")
                             except Exception as retry_e:
-                                logger.error(f"❌ Retry failed: {retry_e}")
+                                logger.error(f"❌ Retry 1 exception: {retry_e}")
                         
-                        return {
-                            'success': False, 
-                            'error': f'Corrupted customer data detected. Pill ID: {pill.id}, User ID: {pill.user.id}. Please check customer address information for invalid characters or formatting issues. Khazenly error: {error_msg}'
-                        }
+                        # Retry 2: PHONE SWAP - Use secondary phone as primary
+                        if retry_count <= 1 and original_secondary_tel:
+                            logger.info(f"🔄 RETRY 2: PHONE SWAP for pill {pill.pill_number}...")
+                            logger.info(f"🔄 Swapping: Primary {original_primary_tel} -> Secondary as Primary: {original_secondary_tel}")
+                            pill._khazenly_retry_count = 2
+                            
+                            # Swap phones: use secondary as primary, clear secondary
+                            order_data['Customer']['Tel'] = original_secondary_tel
+                            order_data['Customer']['SecondaryTel'] = ""
+                            
+                            # Use new unique customerId to avoid collision with corrupted customer
+                            order_data['Customer']['customerId'] = f"PILL-{pill.pill_number}-ALT"
+                            
+                            # Update orderId to avoid duplicate
+                            order_data['Order']['orderId'] = f"{pill.pill_number}-{int(timezone.now().timestamp())}-r2"
+                            
+                            logger.info(f"🔄 Retry 2 - Primary Tel (swapped): '{order_data['Customer']['Tel']}'")
+                            logger.info(f"🔄 Retry 2 - CustomerId: '{order_data['Customer']['customerId']}'")
+                            
+                            try:
+                                retry_response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
+                                logger.info(f"📡 (RETRY 2 - PHONE SWAP) Response status: {retry_response.status_code}")
+                                logger.info(f"📡 (RETRY 2) Response: {retry_response.text}")
+                                
+                                if retry_response.status_code == 200:
+                                    retry_data = retry_response.json()
+                                    if retry_data.get('resultCode') == 0:
+                                        order_info = retry_data.get('order', {})
+                                        logger.info(f"✓ (RETRY 2 - PHONE SWAP) SUCCESS! Order created with secondary phone!")
+                                        return {
+                                            'success': True,
+                                            'data': {
+                                                'khazenly_order_id': order_info.get('id'),
+                                                'sales_order_number': order_info.get('salesOrderNumber'),
+                                                'order_number': order_info.get('orderNumber'),
+                                                'line_items': retry_data.get('lineItems', []),
+                                                'customer': retry_data.get('customer', {}),
+                                                'raw_response': retry_data,
+                                                'phone_swapped': True,
+                                                'original_phone': original_primary_tel,
+                                                'used_phone': original_secondary_tel
+                                            }
+                                        }
+                                    else:
+                                        logger.error(f"❌ RETRY 2 (PHONE SWAP) also failed: {retry_data.get('result')}")
+                            except Exception as retry_e:
+                                logger.error(f"❌ Retry 2 exception: {retry_e}")
+                        
+                        # All retries failed
+                        if original_secondary_tel:
+                            return {
+                                'success': False, 
+                                'error': f'Corrupted customer data in Khazenly for phone {original_primary_tel}. Tried swapping to secondary phone {original_secondary_tel} but still failed. Pill ID: {pill.id}. The customer record in Khazenly may be corrupted. Khazenly error: {error_msg}'
+                            }
+                        else:
+                            return {
+                                'success': False, 
+                                'error': f'Corrupted customer data in Khazenly for phone {original_primary_tel}. No secondary phone available to try. Pill ID: {pill.id}. Khazenly error: {error_msg}'
+                            }
                     else:
                         return {'success': False, 'error': f'Khazenly API error (Code {result_code}): {error_msg}'}
             else:
