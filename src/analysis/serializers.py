@@ -32,31 +32,9 @@ class ProductAnalyticsSerializer(serializers.ModelSerializer):
         ]
 
 class ProductBuyerSerializer(serializers.ModelSerializer):
-    purchase_type = serializers.SerializerMethodField()
-
     class Meta:
         model = User
-        fields = ['id', 'name', 'username', 'year', 'purchase_type']
-
-    def get_purchase_type(self, obj):
-        # We need the product_id from the context to filter specifically for this product's purchase
-        product_id = self.context.get('product_id')
-        if not product_id:
-            return "unknown"
-            
-        # Check if they have any Manual (pill=None) purchase for this product
-        has_manual = obj.pill_items.filter(product_id=product_id, pill__isnull=True).exists()
-        
-        # Check if they have any Paid (pill!=None) purchase for this product
-        has_paid = obj.pill_items.filter(product_id=product_id, pill__isnull=False).exists()
-        
-        if has_manual and has_paid:
-            return "كلاهما"
-        elif has_manual:
-            return "اضافة يدوية"
-        elif has_paid:
-            return "شراء"
-        return "غير معروف"
+        fields = ['id', 'name', 'username', 'year']
 
 class CategoryAnalyticsSerializer(serializers.ModelSerializer):
     total_products = serializers.IntegerField(read_only=True)

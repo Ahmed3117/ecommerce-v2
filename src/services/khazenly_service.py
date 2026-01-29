@@ -361,38 +361,95 @@ class KhazenlyService:
             logger.info(f"  - primary_tel: '{primary_tel}'")
             
             # Secondary tel priority: user.phone -> user.phone2 -> user.parent_phone
+            # FIXED: Skip any phone that matches primary_tel to avoid duplicates
             secondary_tel = ""
             logger.info(f"  - user.phone: '{getattr(pill.user, 'phone', 'NOT_FOUND')}'")
             logger.info(f"  - user.phone2: '{getattr(pill.user, 'phone2', 'NOT_FOUND')}'")
             logger.info(f"  - user.parent_phone: '{getattr(pill.user, 'parent_phone', 'NOT_FOUND')}'")
             
+            # Normalize primary phone for comparison
+            primary_tel_normalized = primary_tel.strip().replace(' ', '').replace('-', '').replace('+', '') if primary_tel else ""
+            
+            # Try user.phone first
             if hasattr(pill.user, 'phone') and pill.user.phone:
-                secondary_tel = pill.user.phone
-                logger.info(f"✅ Using user.phone as secondary: '{secondary_tel}'")
-            elif hasattr(pill.user, 'phone2') and pill.user.phone2:
-                secondary_tel = pill.user.phone2
-                logger.info(f"✅ Using user.phone2 as secondary: '{secondary_tel}'")
-            elif hasattr(pill.user, 'parent_phone') and pill.user.parent_phone:
-                secondary_tel = pill.user.parent_phone
-                logger.info(f"✅ Using user.parent_phone as secondary: '{secondary_tel}'")
-            else:
-                logger.info("❌ No secondary phone found")
+                candidate = pill.user.phone.strip().replace(' ', '').replace('-', '').replace('+', '')
+                if candidate != primary_tel_normalized:
+                    secondary_tel = pill.user.phone
+                    logger.info(f"✅ Using user.phone as secondary: '{secondary_tel}'")
+                else:
+                    logger.info(f"⚠️ user.phone is same as primary, skipping")
+            
+            # If no secondary yet, try user.phone2
+            if not secondary_tel and hasattr(pill.user, 'phone2') and pill.user.phone2:
+                candidate = pill.user.phone2.strip().replace(' ', '').replace('-', '').replace('+', '')
+                if candidate != primary_tel_normalized:
+                    secondary_tel = pill.user.phone2
+                    logger.info(f"✅ Using user.phone2 as secondary: '{secondary_tel}'")
+                else:
+                    logger.info(f"⚠️ user.phone2 is same as primary, skipping")
+            
+            # If still no secondary, try user.parent_phone
+            if not secondary_tel and hasattr(pill.user, 'parent_phone') and pill.user.parent_phone:
+                candidate = pill.user.parent_phone.strip().replace(' ', '').replace('-', '').replace('+', '')
+                if candidate != primary_tel_normalized:
+                    secondary_tel = pill.user.parent_phone
+                    logger.info(f"✅ Using user.parent_phone as secondary: '{secondary_tel}'")
+                else:
+                    logger.info(f"⚠️ user.parent_phone is same as primary, skipping")
+            
+            if not secondary_tel:
+                logger.info("❌ No secondary phone found (all phones either empty or same as primary)")
             
             # Validate and sanitize customer data
             def sanitize_text(text, max_length, field_name="field"):
                 """
-                Relaxed text sanitization for Khazenly API
-                Mainly removes control characters and ensures UTF-8
+                Enhanced text sanitization for Khazenly API
+                - Removes control characters and invisible Unicode
+                - Normalizes Arabic text
+                - Removes zero-width characters that cause "corrupted data" errors
                 """
                 if not text:
                     return ""
                 
+                import re
+                import unicodedata
+                
                 # Convert to string and strip whitespace
                 sanitized = str(text).strip()
                 
+                # Normalize Unicode to NFC form (composed characters)
+                # This helps with Arabic text that might have combining characters
+                sanitized = unicodedata.normalize('NFC', sanitized)
+                
+                # Remove zero-width characters that are invisible but cause issues
+                # These include: Zero-Width Space, Zero-Width Non-Joiner, Zero-Width Joiner, etc.
+                zero_width_chars = [
+                    '\u200b',  # Zero-Width Space
+                    '\u200c',  # Zero-Width Non-Joiner
+                    '\u200d',  # Zero-Width Joiner
+                    '\u200e',  # Left-To-Right Mark
+                    '\u200f',  # Right-To-Left Mark
+                    '\u202a',  # Left-To-Right Embedding
+                    '\u202b',  # Right-To-Left Embedding
+                    '\u202c',  # Pop Directional Formatting
+                    '\u202d',  # Left-To-Right Override
+                    '\u202e',  # Right-To-Left Override
+                    '\u2060',  # Word Joiner
+                    '\u2061',  # Function Application
+                    '\u2062',  # Invisible Times
+                    '\u2063',  # Invisible Separator
+                    '\u2064',  # Invisible Plus
+                    '\ufeff',  # Byte Order Mark
+                    '\ufffe',  # Byte Order Mark (reversed)
+                ]
+                for char in zero_width_chars:
+                    sanitized = sanitized.replace(char, '')
+                
                 # Remove control characters (except basic whitespace) and null bytes
-                # Keep everything else as the user requested "allow everything normally"
                 sanitized = "".join(ch for ch in sanitized if ord(ch) >= 32 or ch in "\n\r\t")
+                
+                # Replace multiple spaces with single space
+                sanitized = re.sub(r'\s+', ' ', sanitized).strip()
                 
                 # Ensure proper UTF-8 encoding
                 try:
@@ -418,7 +475,7 @@ class KhazenlyService:
                 Enhanced phone validation for Khazenly API
                 - Removes +2/2 country code prefix
                 - Validates Egyptian mobile format (11 digits, starts with 010/011/012/015)
-                - Returns empty string if invalid
+                - Returns empty string if invalid (to prevent "wrong code" errors from Khazenly)
                 """
                 if not phone:
                     return ""
@@ -438,17 +495,26 @@ class KhazenlyService:
                 
                 # Validate Egyptian mobile number format (11 digits, starts with 010/011/012/015)
                 if phone_str:
-                    if len(phone_str) != 11:
-                        logger.warning(f"⚠️ Phone '{phone}' is not 11 digits (got {len(phone_str)})")
+                    # Check for valid prefix first
+                    valid_prefixes = ('010', '011', '012', '015')
+                    if not phone_str.startswith(valid_prefixes):
+                        logger.warning(f"⚠️ Phone '{phone}' doesn't start with valid prefix (010/011/012/015) - REJECTING")
+                        return ""  # Return empty string for invalid prefix
                     
-                    if not (phone_str.startswith('010') or phone_str.startswith('011') or 
-                           phone_str.startswith('012') or phone_str.startswith('015')):
-                        logger.warning(f"⚠️ Phone '{phone}' doesn't start with valid prefix (010/011/012/015)")
+                    # Check length - must be exactly 11 digits for Egyptian mobile
+                    if len(phone_str) < 11:
+                        logger.warning(f"⚠️ Phone '{phone}' is too short ({len(phone_str)} digits) - REJECTING")
+                        return ""  # Return empty string for short phones
                     
-                    # Ensure exactly 11 digits
+                    # Truncate if too long
                     if len(phone_str) > 11:
                         phone_str = phone_str[:11]
                         logger.warning(f"⚠️ Truncated phone to 11 digits: '{phone_str}'")
+                    
+                    # Final validation - must be all digits after processing
+                    if not phone_str.isdigit():
+                        logger.warning(f"⚠️ Phone '{phone_str}' contains non-digit characters after processing - REJECTING")
+                        return ""
                 
                 logger.info(f"✅ Validated phone: '{phone}' -> '{phone_str}'")
                 return phone_str
@@ -772,11 +838,17 @@ class KhazenlyService:
                             
                             # 2. Use stricter sanitization for address/name just in case
                             import re
+                            import unicodedata
+                            
                             def strict_sanitize(text):
                                 if not text: return ""
                                 s = str(text).strip()
-                                # Only alphanumeric, spaces, and safe punctuation
-                                s = re.sub(r'[^\w\s\u0600-\u06FF.,\-]+', ' ', s)
+                                # Normalize Unicode first
+                                s = unicodedata.normalize('NFC', s)
+                                # Remove zero-width characters
+                                s = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\ufffe]+', '', s)
+                                # Only alphanumeric, spaces, and safe punctuation + Arabic
+                                s = re.sub(r'[^\w\s\u0600-\u06FF\u0750-\u077F.,\-()]+', ' ', s)
                                 s = re.sub(r'\s+', ' ', s).strip()
                                 return s
                             
@@ -785,8 +857,16 @@ class KhazenlyService:
                             order_data['Customer']['customerName'] = strict_sanitize(order_data['Customer']['customerName'])
                             order_data['Customer']['Address1'] = strict_sanitize(order_data['Customer']['Address1'])
                             
+                            # FIXED: Clear SecondaryTel on retry - it's a common cause of "wrong code" errors
+                            # If the primary phone was invalid it would have returned empty string from validation
+                            # So the issue might be the secondary phone causing problems
+                            order_data['Customer']['SecondaryTel'] = ""
+                            logger.info(f"🔄 Clearing SecondaryTel on retry to eliminate it as error source")
+                            
                             logger.info(f"🔄 Retry Customer ID: '{retry_customer_id}'")
+                            logger.info(f"🔄 Retry Customer Name: '{order_data['Customer']['customerName']}'")
                             logger.info(f"🔄 Retry Address: '{order_data['Customer']['Address1']}'")
+                            logger.info(f"🔄 Retry Primary Tel: '{order_data['Customer']['Tel']}'")
                             
                             # Recursive call or just resend request?
                             # Resending request to avoid deep recursion loop issues

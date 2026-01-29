@@ -140,3 +140,9 @@ static/
 .aws/
 
 *.env
+
+# Local test scripts and documentation
+easypay_resend_api_docs.md
+test_easypay_direct.py
+test_easypay_resend.py
+test_khazenly_manual.py
