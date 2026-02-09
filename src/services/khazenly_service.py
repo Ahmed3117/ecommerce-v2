@@ -626,10 +626,10 @@ class KhazenlyService:
                     "Address2": "",
                     "Address3": "",
                     "City": khazenly_city,  # FIXED: Use mapped Khazenly city from government code
-                    "Country": "Egypt",
-                    # FIXED: Use unique customerId per order to bypass Khazenly's duplicate customer detection
-                    # This allows the same customer (same phone) to place multiple orders
-                    "customerId": f"PILL-{pill.pill_number}"
+                    "Country": "Egypt"
+                    # NOTE: customerId removed - let Khazenly auto-generate it
+                    # Sending customerId was causing "corrupted customer data / wrong code" errors
+                    # because it forced Khazenly to match against corrupted existing customer records
                 },
                 "lineItems": line_items
             }
@@ -890,14 +890,13 @@ class KhazenlyService:
                             order_data['Customer']['Tel'] = original_secondary_tel
                             order_data['Customer']['SecondaryTel'] = ""
                             
-                            # Use new unique customerId to avoid collision with corrupted customer
-                            order_data['Customer']['customerId'] = f"PILL-{pill.pill_number}-ALT"
+                            # Ensure no customerId is sent to avoid corrupted customer matching
+                            order_data['Customer'].pop('customerId', None)
                             
                             # Update orderId to avoid duplicate
                             order_data['Order']['orderId'] = f"{pill.pill_number}-{int(timezone.now().timestamp())}-r2"
                             
                             logger.info(f"🔄 Retry 2 - Primary Tel (swapped): '{order_data['Customer']['Tel']}'")
-                            logger.info(f"🔄 Retry 2 - CustomerId: '{order_data['Customer']['customerId']}'")
                             
                             try:
                                 retry_response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
@@ -928,16 +927,87 @@ class KhazenlyService:
                             except Exception as retry_e:
                                 logger.error(f"❌ Retry 2 exception: {retry_e}")
                         
-                        # All retries failed
+                        # Retry 3: FRESH CUSTOMER - Use modified phone format to bypass corrupted customer lookup
+                        # This is the nuclear option: format the phone with country code prefix
+                        # to make Khazenly treat it as a completely new customer
+                        logger.info(f"🔄 RETRY 3: FRESH CUSTOMER BYPASS for pill {pill.pill_number}...")
+                        pill._khazenly_retry_count = 3
+                        
+                        # Use the original primary phone but with a different format
+                        # Try sending with country code prefix (20XXXXXXXXXX) which is still valid
+                        # but might bypass the corrupted customer lookup
+                        fresh_phone = original_primary_tel
+                        if fresh_phone and fresh_phone.startswith('0'):
+                            # Convert 01XXXXXXXXX to 201XXXXXXXXX (Egyptian international format)
+                            fresh_phone = '2' + fresh_phone
+                        
+                        # Store the real phone in additionalNotes for the delivery team
+                        original_notes = order_data['Order'].get('additionalNotes', '')
+                        order_data['Order']['additionalNotes'] = (
+                            f"{original_notes} | REAL PHONES: Primary={original_primary_tel}, "
+                            f"Secondary={original_secondary_tel}"
+                        )
+                        
+                        # Set fresh phone and clear everything else
+                        order_data['Customer']['Tel'] = fresh_phone
+                        order_data['Customer']['SecondaryTel'] = ""
+                        order_data['Customer'].pop('customerId', None)
+                        
+                        # Use a completely fresh customer name format to avoid ANY matching
+                        original_name = order_data['Customer'].get('customerName', '')
+                        order_data['Customer']['customerName'] = sanitize_text(
+                            original_name, 50, "customerName"
+                        )
+                        
+                        # Fresh orderId
+                        order_data['Order']['orderId'] = f"{pill.pill_number}-{int(timezone.now().timestamp())}-r3"
+                        
+                        logger.info(f"🔄 Retry 3 - Fresh Phone: '{fresh_phone}' (original: '{original_primary_tel}')")
+                        logger.info(f"🔄 Retry 3 - No customerId, fresh order data")
+                        
+                        try:
+                            retry_response = requests.post(api_url, json=order_data, headers=headers, timeout=60)
+                            logger.info(f"📡 (RETRY 3 - FRESH CUSTOMER) Response status: {retry_response.status_code}")
+                            logger.info(f"📡 (RETRY 3) Response: {retry_response.text}")
+                            
+                            if retry_response.status_code == 200:
+                                retry_data = retry_response.json()
+                                if retry_data.get('resultCode') == 0:
+                                    order_info = retry_data.get('order', {})
+                                    logger.info(f"✓ (RETRY 3 - FRESH CUSTOMER) SUCCESS! Order created with fresh customer data!")
+                                    return {
+                                        'success': True,
+                                        'data': {
+                                            'khazenly_order_id': order_info.get('id'),
+                                            'sales_order_number': order_info.get('salesOrderNumber'),
+                                            'order_number': order_info.get('orderNumber'),
+                                            'line_items': retry_data.get('lineItems', []),
+                                            'customer': retry_data.get('customer', {}),
+                                            'raw_response': retry_data,
+                                            'fresh_customer_bypass': True,
+                                            'original_phone': original_primary_tel,
+                                            'used_phone': fresh_phone
+                                        }
+                                    }
+                                else:
+                                    logger.error(f"❌ RETRY 3 (FRESH CUSTOMER) also failed: {retry_data.get('result')}")
+                        except Exception as retry_e:
+                            logger.error(f"❌ Retry 3 exception: {retry_e}")
+                        
+                        # All retries failed — provide detailed error for admin
                         if original_secondary_tel:
                             return {
                                 'success': False, 
-                                'error': f'Corrupted customer data in Khazenly for phone {original_primary_tel}. Tried swapping to secondary phone {original_secondary_tel} but still failed. Pill ID: {pill.id}. The customer record in Khazenly may be corrupted. Khazenly error: {error_msg}'
+                                'error': f'Corrupted customer data detected. Pill ID: {pill.id}, User ID: {pill.user.id}. '
+                                         f'Please check customer address information for invalid characters or formatting issues. '
+                                         f'Khazenly error: {error_msg}'
                             }
                         else:
                             return {
                                 'success': False, 
-                                'error': f'Corrupted customer data in Khazenly for phone {original_primary_tel}. No secondary phone available to try. Pill ID: {pill.id}. Khazenly error: {error_msg}'
+                                'error': f'Corrupted customer data detected. Pill ID: {pill.id}, User ID: {pill.user.id}. '
+                                         f'Please check customer address information for invalid characters or formatting issues. '
+                                         f'Khazenly error: {error_msg}'
                             }
                     else:
                         return {'success': False, 'error': f'Khazenly API error (Code {result_code}): {error_msg}'}
