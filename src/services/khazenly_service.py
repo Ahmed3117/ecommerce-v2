@@ -2,6 +2,7 @@ import requests
 import json
 import logging
 import re
+import copy
 from django.conf import settings
 from django.core.cache import cache
 from datetime import datetime, timedelta
@@ -275,9 +276,9 @@ class KhazenlyService:
             
             address = pill.pilladdress
             
-            # FIXED: Create unique order ID to avoid conflicts
-            timestamp_suffix = int(timezone.now().timestamp())
-            unique_order_id = f"{pill.pill_number}-{timestamp_suffix}"
+            # Use deterministic order ID for idempotency.
+            # Retries that intentionally need a new orderId append explicit suffixes later.
+            unique_order_id = str(pill.pill_number)
             
             # Prepare line items with logical product data including color and size
             line_items = []
@@ -1040,10 +1041,80 @@ class KhazenlyService:
                                 }
                             }
                         else:
-                            # Order doesn't exist but customer does - could be from another order
+                            # Order not found by lookup endpoint; try recovery retries with explicit customerId values.
+                            # Some Khazenly tenants reject auto-generated consignee creation when a matching customer already exists.
+                            logger.warning(
+                                f"⚠️ Order lookup did not find order {pill.pill_number}. "
+                                f"Attempting duplicate-customer recovery retries with explicit customerId."
+                            )
+
+                            base_customer_id = f"USER-{pill.user.id}"
+                            customer_id_candidates = [
+                                base_customer_id,
+                                f"{base_customer_id}-{str(pill.pill_number)[-8:]}"
+                            ]
+
+                            for idx, candidate_customer_id in enumerate(customer_id_candidates, start=1):
+                                retry_order_data = copy.deepcopy(order_data)
+                                retry_order_data['Customer']['customerId'] = candidate_customer_id
+                                retry_order_data['Order']['orderId'] = (
+                                    f"{pill.pill_number}-{int(timezone.now().timestamp())}-dup{idx}"
+                                )
+
+                                logger.info(
+                                    f"🔄 DUPLICATE RECOVERY RETRY {idx}: "
+                                    f"customerId='{candidate_customer_id}', "
+                                    f"orderId='{retry_order_data['Order']['orderId']}'"
+                                )
+
+                                try:
+                                    retry_response = requests.post(
+                                        api_url,
+                                        json=retry_order_data,
+                                        headers=headers,
+                                        timeout=60
+                                    )
+                                    logger.info(
+                                        f"📡 (DUPLICATE RETRY {idx}) Response status: {retry_response.status_code}"
+                                    )
+                                    logger.info(
+                                        f"📡 (DUPLICATE RETRY {idx}) Response: {retry_response.text}"
+                                    )
+
+                                    if retry_response.status_code == 200:
+                                        retry_data = retry_response.json()
+                                        if retry_data.get('resultCode') == 0:
+                                            order_info = retry_data.get('order', {})
+                                            logger.info(
+                                                f"✅ Duplicate recovery succeeded for pill {pill.pill_number} "
+                                                f"using customerId='{candidate_customer_id}'"
+                                            )
+                                            return {
+                                                'success': True,
+                                                'data': {
+                                                    'khazenly_order_id': order_info.get('id'),
+                                                    'sales_order_number': order_info.get('salesOrderNumber'),
+                                                    'order_number': order_info.get('orderNumber'),
+                                                    'line_items': retry_data.get('lineItems', []),
+                                                    'customer': retry_data.get('customer', {}),
+                                                    'raw_response': retry_data,
+                                                    'duplicate_customer_recovered': True,
+                                                    'used_customer_id': candidate_customer_id
+                                                }
+                                            }
+                                except Exception as retry_exception:
+                                    logger.error(
+                                        f"❌ Duplicate recovery retry {idx} exception for pill {pill.pill_number}: "
+                                        f"{retry_exception}"
+                                    )
+
                             return {
-                                'success': False, 
-                                'error': f'Customer already exists in Khazenly (from a previous order). This may indicate the order was partially processed. Please check Khazenly dashboard for order {pill.pill_number} or contact support. Details: {error_msg}'
+                                'success': False,
+                                'error': (
+                                    f"Customer already exists in Khazenly and duplicate recovery retries failed. "
+                                    f"Please check Khazenly dashboard for order {pill.pill_number} or contact support. "
+                                    f"Details: {error_msg}"
+                                )
                             }
                 except:
                     error_msg = f'HTTP {response.status_code}: {response.text[:200]}...' if len(response.text) > 200 else response.text
