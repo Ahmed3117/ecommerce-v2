@@ -97,7 +97,7 @@ class FawaterakPaymentService:
             customer_data = {
                 "first_name": customer_names[0][:50],
                 "last_name": " ".join(customer_names[1:])[:50] if len(customer_names) > 1 else "User",
-                "email": address.email or f"customer+{pill.id}@bookifay.com",
+                "email": address.email or f"customer+{pill.id}@{settings.FALLBACK_EMAIL_DOMAIN}",
                 "phone": address.phone.replace('+', '').replace('-', '').replace(' ', '') if address.phone else "",
                 "address": address.address[:200] if address.address else "",
                 "customer_unique_id": str(pill.user.id)

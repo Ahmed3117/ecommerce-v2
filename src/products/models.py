@@ -626,94 +626,77 @@ class Pill(models.Model):
             self._check_and_update_stock_problems()
 
     def _create_khazenly_order(self):
-        """Create Khazenly order when paid becomes True"""
+        """
+        Create Khazenly order when paid becomes True.
+
+        Concurrency protection (layered):
+        1. Cache-based lock  – fast, prevents most duplicate triggers.
+        2. DB select_for_update – blocks concurrent transactions on same row.
+        3. Pre-flight API check – catches orders that succeeded but weren't
+           recorded locally (e.g. timeout after success).
+        """
         lock_key = f"khazenly_send_lock:{self.pk}"
         lock_timeout_seconds = 300
 
-        # Prevent concurrent/manual duplicate sends for the same pill.
-        # cache.add is atomic on shared cache backends (e.g. Redis/Memcached).
+        # Layer 1: Cache lock (works across requests in the same cache backend)
         if not cache.add(lock_key, "1", timeout=lock_timeout_seconds):
             logger.warning(
-                f"Skipping Khazenly order creation for pill {self.pill_number} - "
-                f"another send process is already running"
+                f"Skipping Khazenly order creation for pill {self.pill_number} – "
+                f"another send process is already running (cache lock)"
             )
             return
 
         try:
-            # Always re-read from DB to make idempotency decisions on latest data.
-            current_pill = Pill.objects.get(pk=self.pk)
-
-            # Check if order already sent to Khazenly - skip if it exists
-            if current_pill.has_khazenly_order:
-                logger.info(f"Skipping Khazenly order creation for pill {current_pill.pill_number} - order already exists")
-                logger.info(f"  - Existing Khazenly Order ID: {current_pill.khazenly_order_id}")
-                logger.info(f"  - Existing Sales Order Number: {current_pill.khazenly_sales_order_number}")
-                return
-            
             from services.khazenly_service import khazenly_service
 
-            # Preflight check in Khazenly by order number to avoid double creation
-            # when local DB wasn't updated after a prior successful send.
-            existing_order = khazenly_service.check_order_exists(current_pill.pill_number)
-            if existing_order and existing_order.get('salesOrderNumber'):
-                existing_data = {
-                    'khazenly_order_id': existing_order.get('id'),
-                    'sales_order_number': existing_order.get('salesOrderNumber'),
-                    'order_number': existing_order.get('orderNumber'),
-                    'already_exists': True,
-                    'message': 'Order already exists in Khazenly (idempotent pre-check)'
-                }
-
-                Pill.objects.filter(pk=self.pk).update(
-                    khazenly_data=existing_data,
-                    khazenly_order_id=existing_data.get('khazenly_order_id'),
-                    khazenly_sales_order_number=existing_data.get('sales_order_number'),
-                    khazenly_created_at=timezone.now(),
-                    is_shipped=True
+            # Layer 2: DB-level row lock inside a transaction
+            with transaction.atomic():
+                current_pill = (
+                    Pill.objects
+                    .select_for_update()
+                    .get(pk=self.pk)
                 )
 
-                logger.info(
-                    f"Skipping create_order for pill {current_pill.pill_number} - "
-                    f"order already exists in Khazenly as {existing_data.get('sales_order_number')}"
-                )
-                return
-            
-            logger.info(f"Creating Khazenly order for pill {current_pill.pill_number}")
-            
-            result = khazenly_service.create_order(current_pill)
-            
-            if result['success']:
-                data = result['data']
-                
-                # Store specific Khazenly order information and set is_shipped to True
-                update_fields = {
-                    'khazenly_data': data,
-                    'khazenly_order_id': data.get('khazenly_order_id'),
-                    'khazenly_sales_order_number': data.get('sales_order_number'),
-                    'khazenly_created_at': timezone.now(),
-                    'is_shipped': True  # Set is_shipped to True after successful order creation
-                }
-                
-                # Update the model without triggering save again
-                Pill.objects.filter(pk=self.pk).update(**update_fields)
-                
-                logger.info(f"✓ Successfully created Khazenly order for pill {current_pill.pill_number}")
-                logger.info(f"  - Khazenly Order ID: {data.get('khazenly_order_id')}")
-                logger.info(f"  - Sales Order Number: {data.get('sales_order_number')}")
-                logger.info(f"  - Order Number: {data.get('order_number')}")
-                logger.info(f"  - is_shipped set to True")
-                
-            else:
-                error_msg = result.get('error', 'Unknown error from Khazenly service')
-                logger.error(f"✗ Failed to create Khazenly order for pill {current_pill.pill_number}: {error_msg}")
-                # Raise exception so it can be caught and displayed in admin
-                raise Exception(f"Khazenly service error: {error_msg}")
-                
+                # Already sent? Skip.
+                if current_pill.has_khazenly_order:
+                    logger.info(
+                        f"Skipping Khazenly for pill {current_pill.pill_number} "
+                        f"– already has order {current_pill.khazenly_sales_order_number}"
+                    )
+                    return
+
+                # Layer 3: The service's create_order does its own pre-flight
+                # check_order_exists call, so even if it slipped past the DB
+                # check it will be caught there.
+                logger.info(f"Creating Khazenly order for pill {current_pill.pill_number}")
+                result = khazenly_service.create_order(current_pill)
+
+                if result['success']:
+                    data = result['data']
+                    # Atomic update inside the same transaction
+                    Pill.objects.filter(pk=self.pk).update(
+                        khazenly_data=data,
+                        khazenly_order_id=data.get('khazenly_order_id'),
+                        khazenly_sales_order_number=data.get('sales_order_number'),
+                        khazenly_created_at=timezone.now(),
+                        is_shipped=True,
+                    )
+                    logger.info(
+                        f"Successfully created Khazenly order for pill "
+                        f"{current_pill.pill_number}: {data.get('sales_order_number')}"
+                    )
+                else:
+                    error_msg = result.get('error', 'Unknown Khazenly error')
+                    logger.error(
+                        f"Failed to create Khazenly order for pill "
+                        f"{current_pill.pill_number}: {error_msg}"
+                    )
+                    raise Exception(f"Khazenly service error: {error_msg}")
+
         except Exception as e:
-            logger.error(f"✗ Error creating Khazenly order for pill {self.pill_number}: {str(e)}")
+            logger.error(f"Error creating Khazenly order for pill {self.pill_number}: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            # Re-raise the exception so it can be caught by the admin view
+            logger.error(traceback.format_exc())
             raise
         finally:
             cache.delete(lock_key)

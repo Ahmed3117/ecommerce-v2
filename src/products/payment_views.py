@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.authentication import get_authorization_header
+from django.conf import settings as django_settings
 from django.contrib.auth.models import User
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -292,23 +293,23 @@ class PaymentSuccessView(APIView):
                     logger.info(f"✓ Payment SUCCESS confirmed for pill {pill_number}")
                     
                     # Redirect to frontend success page
-                    frontend_url = f"https://bookefay.com/profile/orders?pill_number={pill_number}&payment_status=success&amount={pill.final_price()}"
+                    frontend_url = f"{django_settings.FRONTEND_URL}/profile/orders?pill_number={pill_number}&payment_status=success&amount={pill.final_price()}"
                     return redirect(frontend_url)
                 else:
                     logger.warning(f"Payment status still pending for pill {pill_number}: {payment_status}")
                     # Redirect to frontend pending page  
-                    frontend_url = f"https://bookefay.com?pill_number={pill_number}&payment_status=pending&amount={pill.final_price()}"
+                    frontend_url = f"{django_settings.FRONTEND_URL}?pill_number={pill_number}&payment_status=pending&amount={pill.final_price()}"
                     return redirect(frontend_url)
             else:
                 logger.error(f"Could not verify payment status for pill {pill_number}")
                 # Redirect to frontend with error
-                frontend_url = f"https://bookefay.com/profile?pill_number={pill_number}&payment_status=error&amount={pill.final_price()}"
+                frontend_url = f"{django_settings.FRONTEND_URL}/profile?pill_number={pill_number}&payment_status=error&amount={pill.final_price()}"
                 return redirect(frontend_url)
                 
         except Exception as e:
             logger.error(f"Error in payment success: {e}")
             # Redirect to frontend with error
-            frontend_url = f"https://bookefay.com/profile?pill_number={pill_number}&payment_status=error"
+            frontend_url = f"{django_settings.FRONTEND_URL}/profile?pill_number={pill_number}&payment_status=error"
             return redirect(frontend_url)
 
 class PaymentFailedView(APIView):
@@ -324,13 +325,13 @@ class PaymentFailedView(APIView):
             logger.info(f"✗ Payment FAILED for pill {pill_number}")
             
             # Redirect to frontend failure page
-            frontend_url = f"https://bookefay.com/profile?pill_number={pill_number}&payment_status=failed&amount={pill.final_price()}"
+            frontend_url = f"{django_settings.FRONTEND_URL}/profile?pill_number={pill_number}&payment_status=failed&amount={pill.final_price()}"
             return redirect(frontend_url)
             
         except Exception as e:
             logger.error(f"Error in payment failed: {e}")
             # Redirect to frontend with error
-            frontend_url = f"https://bookefay.com/profile?pill_number={pill_number}&payment_status=error"
+            frontend_url = f"{django_settings.FRONTEND_URL}/profile?pill_number={pill_number}&payment_status=error"
             return redirect(frontend_url)
 
 class PaymentPendingView(APIView):
@@ -346,13 +347,13 @@ class PaymentPendingView(APIView):
             logger.info(f"⏳ Payment PENDING for pill {pill_number}")
             
             # Redirect to frontend pending page
-            frontend_url = f"https://bookefay.com?pill_number={pill_number}&payment_status=pending&amount={pill.final_price()}"
+            frontend_url = f"{django_settings.FRONTEND_URL}?pill_number={pill_number}&payment_status=pending&amount={pill.final_price()}"
             return redirect(frontend_url)
             
         except Exception as e:
             logger.error(f"Error in payment pending: {e}")
             # Redirect to frontend with error
-            frontend_url = f"https://bookefay.com?pill_number={pill_number}&payment_status=error"
+            frontend_url = f"{django_settings.FRONTEND_URL}?pill_number={pill_number}&payment_status=error"
             return redirect(frontend_url)
 
 class CreateShakeoutInvoiceView(APIView):

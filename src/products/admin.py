@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import admin
 from django.db.models import Sum
 from django.utils.html import format_html
@@ -710,7 +711,7 @@ class PillAdmin(admin.ModelAdmin):
                     order_data = [
                         unique_order_id,  # Order ID
                         pill.pill_number,  # Order Number
-                        'BOOKIFAY',  # Store Name
+                        settings.KHAZENLY_CONSIGNEE_PREFIX,  # Store Name
                         address.name or pill.user.name or pill.user.username,  # Customer Name
                         primary_tel,  # Primary Tel
                         secondary_tel,  # Secondary Tel
