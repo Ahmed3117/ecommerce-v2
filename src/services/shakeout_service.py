@@ -97,7 +97,7 @@ class ShakeoutService:
             customer_data = {
                 "first_name": pill_address.name.split()[0] if pill_address.name else "Customer",
                 "last_name": " ".join(pill_address.name.split()[1:]) if pill_address.name and len(pill_address.name.split()) > 1 else "Name",
-                "email": pill_address.email or f"customer_{pill.id}@bookefay.com",
+                "email": pill_address.email or f"customer_{pill.id}@{settings.FALLBACK_EMAIL_DOMAIN}",
                 "phone": formatted_phone,
                 "address": f"{pill_address.address or 'Cairo'}, {pill_address.government or 'Egypt'}"
             }
@@ -148,9 +148,9 @@ class ShakeoutService:
                 "due_date": (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
                 "customer": customer_data,
                 "redirection_urls": {
-                    "success_url": f"https://bookefay.com/payment-redirect/{pill.pill_number}/successful-payment/success/{int(datetime.now().timestamp() * 1000)}",
-                    "fail_url": f"https://bookefay.com/payment-redirect/{pill.pill_number}/failed-payment/failed/{int(datetime.now().timestamp() * 1000)}",
-                    "pending_url": f"https://bookefay.com/payment-redirect/{pill.pill_number}/pending-payment/pending/{int(datetime.now().timestamp() * 1000)}"
+                    "success_url": f"{settings.FRONTEND_URL}/payment-redirect/{pill.pill_number}/successful-payment/success/{int(datetime.now().timestamp() * 1000)}",
+                    "fail_url": f"{settings.FRONTEND_URL}/payment-redirect/{pill.pill_number}/failed-payment/failed/{int(datetime.now().timestamp() * 1000)}",
+                    "pending_url": f"{settings.FRONTEND_URL}/payment-redirect/{pill.pill_number}/pending-payment/pending/{int(datetime.now().timestamp() * 1000)}"
                 },
                 "invoice_items": invoice_items,
                 "tax_enabled": False,
