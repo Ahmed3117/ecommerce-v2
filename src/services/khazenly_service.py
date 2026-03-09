@@ -640,13 +640,17 @@ class KhazenlyService:
         "Corrupted customer data / wrong code" means the customer record
         stored in Khazenly (matched by phone) is broken.
 
-        Retry strategy (max 1 retry):
-        - Clear secondaryTel (often contains junk data from students).
-        - Re-sanitize name & address with strict rules.
-        - Keep the SAME orderId (deterministic, no timestamp).
-        - Keep the SAME primary phone - do NOT swap to secondary.
+        Retry strategy (3 attempts total):
+        1. Original request already failed.
+        2. Retry with cleaned data (secondaryTel cleared, strict sanitization),
+           same customerId.
+        3. Retry with customerId=null — lets Khazenly bypass the corrupted
+           record and auto-create a new customer entry.
 
-        If still fails -> return a clear message for admin to contact
+        Keep the SAME orderId throughout (deterministic, no timestamp).
+        Keep the SAME primary phone — do NOT swap to secondary.
+
+        If all retries fail -> return a clear message for admin to contact
         Khazenly support to fix the customer record.
         """
         logger.warning(f"Corrupted customer for pill {pill.pill_number} - retrying with cleaned data")
@@ -668,7 +672,8 @@ class KhazenlyService:
                 clean = re.sub(r'\s+', ' ', clean).strip()
                 retry_data['Customer'][field] = clean
 
-        logger.info(f"Retry - Tel: {retry_data['Customer']['Tel']}, "
+        # ----- Retry 1: cleaned data, same customerId ---------------------
+        logger.info(f"Retry 1 - Tel: {retry_data['Customer']['Tel']}, "
                     f"secondaryTel cleared, customerId: {retry_data['Customer'].get('customerId')}")
 
         response, net_err = self._send_order_request(api_url, headers, retry_data)
@@ -682,10 +687,47 @@ class KhazenlyService:
                 rdata = {}
 
             if rdata.get('resultCode') == 0:
-                logger.info("Corrupted-customer retry succeeded (secondaryTel cleared)")
+                logger.info("Corrupted-customer retry 1 succeeded (secondaryTel cleared)")
                 result = self._parse_success(rdata)
                 result['data']['retry_note'] = 'Succeeded after clearing secondaryTel'
                 return result
+
+        # ----- Retry 2: customerId=null to bypass corrupted record ---------
+        # The corrupted record in Khazenly is matched by our customerId.
+        # Sending null lets Khazenly auto-create a fresh customer entry,
+        # bypassing the broken record.
+        logger.warning(
+            f"Retry 1 failed for pill {pill.pill_number} - "
+            f"trying with customerId=null to bypass corrupted record"
+        )
+        retry_data2 = copy.deepcopy(retry_data)
+        retry_data2['Customer']['customerId'] = None
+
+        response2, net_err2 = self._send_order_request(api_url, headers, retry_data2)
+        if net_err2:
+            return {'success': False, 'error': net_err2}
+
+        if response2.status_code == 200:
+            try:
+                rdata2 = response2.json()
+            except json.JSONDecodeError:
+                rdata2 = {}
+
+            if rdata2.get('resultCode') == 0:
+                logger.info(
+                    "Corrupted-customer retry 2 succeeded "
+                    "(customerId=null bypassed corrupted record)"
+                )
+                result = self._parse_success(rdata2)
+                result['data']['retry_note'] = (
+                    'Succeeded with customerId=null (corrupted record bypassed). '
+                    'Customer record in Khazenly may need cleanup.'
+                )
+                return result
+
+            # Log what Khazenly returned on the second retry
+            retry2_error = rdata2.get('result', rdata2.get('message', 'Unknown'))
+            logger.error(f"Retry 2 also failed: {retry2_error}")
 
         # All retries exhausted
         primary_phone = order_data['Customer'].get('Tel', '?')
