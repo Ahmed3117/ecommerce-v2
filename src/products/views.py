@@ -69,7 +69,7 @@ class TeacherDetailView(generics.RetrieveAPIView):
         return Response(serializer.data)
 
 class ProductListView(generics.ListAPIView):
-    queryset = Product.objects.all()
+    queryset = Product.objects.filter(is_active=True)
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, rest_filters.SearchFilter]
     filterset_class = ProductFilter
@@ -77,12 +77,12 @@ class ProductListView(generics.ListAPIView):
 
 
 class ProductDetailView(generics.RetrieveAPIView):
-    queryset = Product.objects.all()
+    queryset = Product.objects.filter(is_active=True)
     serializer_class = ProductSerializer
     lookup_field = 'id'
 
 class Last10ProductsListView(generics.ListAPIView):
-    queryset = Product.objects.all()
+    queryset = Product.objects.filter(is_active=True)
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, rest_filters.SearchFilter]
     filterset_class = ProductFilter
@@ -122,20 +122,22 @@ class CombinedProductsView(APIView):
         return Response(data, status=status.HTTP_200_OK)
     
     def get_last_products(self, limit):
-        queryset = Product.objects.all().order_by('-id')[:limit]
+        queryset = Product.objects.filter(is_active=True).order_by('-id')[:limit]
         serializer = ProductSerializer(queryset, many=True, context={'request': self.request})
         return serializer.data
     
     def get_important_products(self, limit):
         queryset = Product.objects.filter(
-            is_important=True
+            is_important=True,
+            is_active=True
         ).order_by('-date_added')[:limit]
         serializer = ProductSerializer(queryset, many=True, context={'request': self.request})
         return serializer.data
     
     def get_year_products(self, year, limit):
         queryset = Product.objects.filter(
-            year=year
+            year=year,
+            is_active=True
         ).order_by('-date_added')[:limit]
         serializer = ProductSerializer(queryset, many=True, context={'request': self.request})
         return serializer.data
@@ -158,7 +160,8 @@ class SpecialBestProductsView(APIView):
     def get_special_products(self, limit):
         # Get the special products with their related product data
         special_products = SpecialProduct.objects.filter(
-            is_active=True
+            is_active=True,
+            product__is_active=True
         ).order_by('-order')[:limit].select_related('product')
         
         # Serialize with additional fields
@@ -182,7 +185,8 @@ class SpecialBestProductsView(APIView):
     def get_best_products(self, limit):
         # Get the best products with their related product data
         best_products = BestProduct.objects.filter(
-            is_active=True
+            is_active=True,
+            product__is_active=True
         ).order_by('-order')[:limit].select_related('product')
         
         # Serialize with additional fields
@@ -522,7 +526,7 @@ class LovedProductListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         if self.request.user.is_authenticated:
-            return LovedProduct.objects.filter(user=self.request.user)
+            return LovedProduct.objects.filter(user=self.request.user, product__is_active=True)
         return LovedProduct.objects.none()
 
     def perform_create(self, serializer):
@@ -542,7 +546,8 @@ class ProductAvailabilitiesView(generics.ListAPIView):
 
     def get_queryset(self):
         product_id = self.kwargs['product_id']
-        return ProductAvailability.objects.filter(product_id=product_id)
+        product = get_object_or_404(Product, id=product_id, is_active=True)
+        return ProductAvailability.objects.filter(product=product)
 
 
 class ProductAvailabilitiesWithTotalView(generics.ListAPIView):
@@ -584,7 +589,7 @@ class NewArrivalsView(generics.ListAPIView):
     filterset_fields = ['category', 'sub_category', 'brand']
 
     def get_queryset(self):
-        queryset = Product.objects.all().order_by('-date_added')
+        queryset = Product.objects.filter(is_active=True).order_by('-date_added')
         days = self.request.query_params.get('days', None)
         if days:
             date_threshold = timezone.now() - timedelta(days=int(days))
@@ -598,7 +603,7 @@ class BestSellersView(generics.ListAPIView):
 
     def get_queryset(self):
         # Get products with paid/delivered items
-        queryset = Product.objects.all().annotate(
+        queryset = Product.objects.filter(is_active=True).annotate(
             total_sold=Sum(
                 Case(
                     When(
@@ -673,7 +678,7 @@ class ProductRecommendationsView(generics.ListAPIView):
         recommendations = []
         
         if current_product_id:
-            current_product = get_object_or_404(Product, id=current_product_id)
+            current_product = get_object_or_404(Product.objects.filter(is_active=True), id=current_product_id)
             similar_products = Product.objects.filter(
                 is_active=True
             ).filter(

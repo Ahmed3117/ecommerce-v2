@@ -1278,6 +1278,14 @@ class Pill(models.Model):
         Returns: dict with availability info
         """
         try:
+            if not pill_item.product.is_active:
+                return {
+                    'available': False,
+                    'reason': 'product_inactive',
+                    'available_quantity': 0,
+                    'required_quantity': pill_item.quantity
+                }
+            
             availability = pill_item.product.availabilities.filter(
                 size=pill_item.size,
                 color=pill_item.color
