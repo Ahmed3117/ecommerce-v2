@@ -617,16 +617,17 @@ class PillItemCreateUpdateSerializer(serializers.ModelSerializer):
             })
 
         # Max Items in Cart Check (only for new cart items)
+        # We count total quantities across all cart items + the incoming quantity
         if not instance:
             user = self.context['request'].user
-            current_cart_count = PillItem.objects.filter(
+            current_total_quantity = PillItem.objects.filter(
                 user=user,
                 status__isnull=True
-            ).count()
+            ).aggregate(total=Sum('quantity'))['total'] or 0
             
-            if current_cart_count >= cart_settings.max_items_in_cart:
+            if current_total_quantity + quantity > cart_settings.max_items_in_cart:
                 raise ValidationMessage({
-                    'message': f'لا يمكنك اضافة اكثر من {cart_settings.max_items_in_cart} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات'
+                    'message': f'لا يمكنك اضافة اكثر من {cart_settings.max_items_in_cart} قطعة فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات'
                 })
 
         self._validate_stock(product, size, color, quantity)
