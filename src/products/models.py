@@ -174,7 +174,7 @@ class Product(models.Model):
         default=10,
         help_text="Minimum quantity threshold for low stock alerts"
     )
-    description = models.TextField(max_length=1000, null=True, blank=True)
+    description = models.TextField(max_length=2000, null=True, blank=True)
     is_important = models.BooleanField(
         default=False,
         help_text="Mark if this product is important/special"

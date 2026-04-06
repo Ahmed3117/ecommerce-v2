@@ -324,15 +324,15 @@ class PillItemCreateView(generics.CreateAPIView):
                         'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج.']
                     })
                 
-                # Check cart item limit for new items
-                current_cart_count = PillItem.objects.filter(
+                # Check cart item limit for new items (total quantity across all cart items)
+                current_total_quantity = PillItem.objects.filter(
                     user=user,
                     status__isnull=True
-                ).count()
+                ).aggregate(total=Sum('quantity'))['total'] or 0
                 
-                if current_cart_count >= max_items:
+                if current_total_quantity + quantity > max_items:
                     raise serializers.ValidationError({
-                        'non_field_errors': [f'لا يمكنك اضافة اكثر من {max_items} منتجات فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات']
+                        'non_field_errors': [f'لا يمكنك اضافة اكثر من {max_items} قطعة فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات']
                     })
                 
                 # Create new item
