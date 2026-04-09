@@ -301,6 +301,16 @@ class PillItemCreateView(generics.CreateAPIView):
                         'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج. لديك حاليا {existing_item.quantity} قطعة.']
                     })
                 
+                # Check total cart quantity (excluding the existing item being merged)
+                other_items_total = PillItem.objects.filter(
+                    user=user,
+                    status__isnull=True
+                ).exclude(pk=existing_item.pk).aggregate(total=Sum('quantity'))['total'] or 0
+                if other_items_total + combined_quantity > max_items:
+                    raise serializers.ValidationError({
+                        'non_field_errors': [f'لا يمكنك اضافة اكثر من {max_items} قطعة فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات']
+                    })
+                
                 try:
                     temp_data = {
                         'product': product.id,
@@ -362,16 +372,27 @@ class PillItemUpdateView(generics.UpdateAPIView):
                 instance.delete()
                 return Response(status=status.HTTP_204_NO_CONTENT)
             
-            # Validate max quantity per item
+            # Validate max quantity per item and total cart quantity
             if 'quantity' in request.data:
                 from products.models import CartSettings
                 cart_settings = CartSettings.get_settings()
                 max_quantity_per_item = cart_settings.max_quantity_per_item
+                max_items = cart_settings.max_items_in_cart
                 requested_quantity = int(request.data.get('quantity', 1))
                 
                 if requested_quantity > max_quantity_per_item:
                     raise serializers.ValidationError({
                         'quantity': [f'لا يمكنك اضافة اكثر من {max_quantity_per_item} قطعة من نفس المنتج.']
+                    })
+                
+                # Check total cart quantity (excluding the item being updated)
+                other_items_total = PillItem.objects.filter(
+                    user=request.user,
+                    status__isnull=True
+                ).exclude(pk=instance.pk).aggregate(total=Sum('quantity'))['total'] or 0
+                if other_items_total + requested_quantity > max_items:
+                    raise serializers.ValidationError({
+                        'non_field_errors': [f'لا يمكنك اضافة اكثر من {max_items} قطعة فى السلة , انشئ فاتورة اولا او امسح بعض المنتجات']
                     })
             
             data = request.data.copy()
