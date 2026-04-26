@@ -404,6 +404,28 @@ class OrderAnalysisView(APIView):
         })
 
 
+def get_government_activity(pill_statuses=None):
+    gov_filters = Q(government__isnull=False) & ~Q(government='')
+
+    if pill_statuses:
+        gov_filters &= Q(pill__status__in=pill_statuses)
+
+    gov_activity_qs = PillAddress.objects.filter(gov_filters).values(
+        'government'
+    ).annotate(
+        pill_count=Count('pill_id', distinct=True),
+        user_count=Count('pill__user_id', distinct=True),
+    ).order_by('-pill_count')
+
+    gov_map = dict(GOVERNMENT_CHOICES)
+    return [{
+        'government_code': item['government'],
+        'government_name': gov_map.get(item['government'], 'Unknown'),
+        'pill_count': item['pill_count'],
+        'user_count': item['user_count'],
+    } for item in gov_activity_qs]
+
+
 
 class CustomerActivityView(APIView):
     """
@@ -422,25 +444,7 @@ class CustomerActivityView(APIView):
         total_users = User.objects.count()
         
         # 3. Government activity
-        gov_activity = Pill.objects.filter(
-            pilladdress__isnull=False
-        ).values(
-            'pilladdress__government'
-        ).annotate(
-            pill_count=Count('id'),
-            user_count=Count('user', distinct=True)
-        ).order_by('-pill_count')
-        
-        gov_map = {code: name for code, name in GOVERNMENT_CHOICES}
-        formatted_gov = []
-        for item in gov_activity:
-            gov_code = item['pilladdress__government']
-            formatted_gov.append({
-                'government_code': gov_code,
-                'government_name': gov_map.get(gov_code, 'Unknown'),
-                'pill_count': item['pill_count'],
-                'user_count': item['user_count']
-            })
+        formatted_gov = get_government_activity()
         
         return Response({
             'user_types': list(user_types),
@@ -857,22 +861,7 @@ class DashboardAnalyticsView(APIView):
         total_users = User.objects.count()
 
         # Government activity analysis
-        gov_activity_qs = Pill.objects.filter(
-            pilladdress__isnull=False, 
-            status__in=['p', 'd']
-        ).values('pilladdress__government') \
-         .annotate(
-             pill_count=Count('id'), 
-             user_count=Count('user', distinct=True)
-         ).order_by('-pill_count')
-
-        gov_map = dict(GOVERNMENT_CHOICES)
-        gov_activity = [{
-            'government_code': item['pilladdress__government'],
-            'government_name': gov_map.get(item['pilladdress__government'], 'Unknown'),
-            'pill_count': item['pill_count'],
-            'user_count': item['user_count']
-        } for item in gov_activity_qs]
+        gov_activity = get_government_activity(pill_statuses=['p', 'd'])
 
         return {
             "user_types": list(user_types),
@@ -917,7 +906,6 @@ class DashboardAnalyticsView(APIView):
                 "approved_requests": req_counts.get('approved', 0)
             }
         }
-
 
 
 
