@@ -1,7 +1,27 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.html import format_html
-from .models import User, UserAddress, UserProfileImage
+from products.models import PillAddress
+from .models import GOVERNMENT_CHOICES, User, UserAddress, UserProfileImage
+
+
+class PillAddressGovernmentFilter(admin.SimpleListFilter):
+    title = 'government (from pill addresses)'
+    parameter_name = 'pill_government'
+
+    def lookups(self, request, model_admin):
+        return GOVERNMENT_CHOICES
+
+    def queryset(self, request, queryset):
+        if not self.value():
+            return queryset
+
+        matching_user_ids = PillAddress.objects.filter(
+            government=self.value(),
+            pill__user__isnull=False,
+        ).values('pill__user_id').distinct()
+
+        return queryset.filter(pk__in=matching_user_ids)
 
 class UserAddressInline(admin.TabularInline):
     model = UserAddress
@@ -12,7 +32,7 @@ class UserAddressInline(admin.TabularInline):
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     list_display = ('username', 'name', 'email', 'phone', 'user_type', 'is_staff', 'get_profile_image_preview')
-    list_filter = ('user_type', 'is_staff', 'is_superuser', 'is_active', 'groups', 'government', 'year')
+    list_filter = ('user_type', 'is_staff', 'is_superuser', 'is_active', 'groups', PillAddressGovernmentFilter, 'year')
     search_fields = ('username', 'name', 'email', 'phone')
     ordering = ('-date_joined',)
     fieldsets = (
