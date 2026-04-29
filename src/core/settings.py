@@ -22,7 +22,8 @@ SECRET_KEY = SECRET_KEY = 'django-insecure-your-secret-key-here-change-in-produc
 #^ SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost','127.0.0.1','13.49.226.161','api2.bookefay.com','testserver']
+_extra_hosts = [h.strip() for h in os.getenv('ALLOWED_HOSTS_EXTRA', '').split(',') if h.strip()]
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver'] + _extra_hosts
 
 
 #^ Application definition 
@@ -56,7 +57,7 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL ='accounts.User'
 
 # Site name for product number generation
-ACTIVE_SITE_NAME = 'BOOKEFAY'
+ACTIVE_SITE_NAME = os.getenv('ACTIVE_SITE_NAME', 'BOOKEFAY')
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -101,8 +102,8 @@ WSGI_APPLICATION = 'core.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'ecom_db',
-        'USER': 'ecom_user',
+        'NAME': 'testcommerce',
+        'USER': 'postgres',
         'PASSWORD': 'withALLAH',
         'HOST': 'localhost',
         'PORT': '5432',
@@ -266,6 +267,7 @@ KHAZENLY_STORE_NAME = os.getenv('KHAZENLY_STORE_NAME', '')
 KHAZENLY_AUTHORIZATION_CODE = os.getenv('KHAZENLY_AUTHORIZATION_CODE', '')
 KHAZENLY_REFRESH_TOKEN = os.getenv('KHAZENLY_REFRESH_TOKEN', '') 
 KHAZENLY_ORDER_USER_EMAIL = os.getenv('KHAZENLY_ORDER_USER_EMAIL', '')  # User email for orders
+KHAZENLY_CONSIGNEE_PREFIX = os.getenv('KHAZENLY_CONSIGNEE_PREFIX', 'BOOKIFAY')  # Prefix for Khazenly customer/consignee codes
 
 # Khazenly Webhook Configuration
 KHAZENLY_WEBHOOK_SECRET = os.getenv('KHAZENLY_HMAC_SECRET', '')  # Updated to use the correct env var name
@@ -275,8 +277,10 @@ KHAZENLY_HMAC_SECRET = os.getenv('KHAZENLY_HMAC_SECRET', '')  # Additional refer
 # Payment Gateway Configuration
 ACTIVE_PAYMENT_METHOD = os.getenv('ACTIVE_PAYMENT_METHOD', 'shakeout').lower()  # 'shakeout' or 'easypay'
 
-# Site URL
+# Site URLs
 SITE_URL = os.getenv('SITE_URL', 'https://api2.bookefay.com')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://bookefay.com')
+FALLBACK_EMAIL_DOMAIN = os.getenv('FALLBACK_EMAIL_DOMAIN', 'bookefay.com')
 
 # Shake-out Configuration - with fallbacks and validation
 SUCCESS_URL = os.getenv('SUCCESS_URL', 'http://bookefay.com/payment-redirect/success/')
@@ -294,9 +298,6 @@ EASYPAY_BASE_URL = os.getenv('EASYPAY_BASE_URL', 'https://api.easy-adds.com/api'
 EASYPAY_WEBHOOK_URL = os.getenv('EASYPAY_WEBHOOK_URL', f'{SITE_URL}/api/webhook/easypay/')
 EASYPAY_PAYMENT_METHOD = os.getenv('EASYPAY_PAYMENT_METHOD', 'fawry')  # Default payment method
 EASYPAY_PAYMENT_EXPIRY = int(os.getenv('EASYPAY_PAYMENT_EXPIRY', '172800000'))  # 48 hours in milliseconds
-
-# API Key for webhook authentication (same as used in e-learning system)
-API_KEY_MANASA = os.getenv('API_KEY_MANASA', 'your-secure-api-key-here')
 
 PILL_STATUS_URL = os.getenv('PILL_STATUS_URL', 'http://bookefay.com/profile/orders')
 

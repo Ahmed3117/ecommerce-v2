@@ -146,13 +146,14 @@ class CategoryFilter(filters.FilterSet):
             return queryset.filter(Q(image__isnull=True) | Q(image__exact=''))
         
 class PillFilter(filters.FilterSet):
-    # Add a date range filter for the `date_added` field
     start_date = filters.DateFilter(field_name='date_added', lookup_expr='gte', label='Start Date')
     end_date = filters.DateFilter(field_name='date_added', lookup_expr='lte', label='End Date')
+    user_year = filters.CharFilter(field_name='user__year', label='User Year')
+    product = filters.NumberFilter(field_name='items__product', label='Product ID')
 
     class Meta:
         model = Pill
-        fields = ['status', 'paid', 'user','pill_number', 'pilladdress__government', 'pilladdress__pay_method', 'easypay_fawry_ref', 'shakeout_invoice_ref']
+        fields = ['status', 'paid', 'user', 'pill_number', 'pilladdress__government', 'pilladdress__pay_method', 'easypay_fawry_ref', 'shakeout_invoice_ref', 'user_year', 'product']
         
         
         

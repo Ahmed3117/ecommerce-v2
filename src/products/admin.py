@@ -270,7 +270,13 @@ class PillAdmin(admin.ModelAdmin):
             if obj.is_resolved:
                 return format_html('<span style="color: #28a745; font-weight: bold;">✓ Resolved</span>')
             else:
-                problem_count = len(obj.stock_problem_items) if obj.stock_problem_items else 0
+                stock_items = obj.stock_problem_items
+                if stock_items is None:
+                    problem_count = 0
+                elif isinstance(stock_items, list):
+                    problem_count = len(stock_items)
+                else:
+                    problem_count = 0
                 return format_html(
                     '<span style="color: #dc3545; font-weight: bold;">⚠ Problem ({} items)</span>',
                     problem_count
@@ -338,25 +344,24 @@ class PillAdmin(admin.ModelAdmin):
     @admin.display(description='Khazenly Actions')
     def khazenly_actions(self, obj):
         """Add manual Khazenly action button for each row"""
+        khazenly_order_display = obj.khazenly_sales_order_number if obj.khazenly_sales_order_number else 'Created'
         if obj.has_khazenly_order:
-            # Already has Khazenly order - show success status with order number
             return format_html(
-                '<span style="color: green; padding: 3px 8px; font-weight: bold; background: #d4edda; border-radius: 3px;">✓ Sent ({0})</span>',
-                obj.khazenly_sales_order_number or 'Created'
+                '<span style="color: green; padding: 3px 8px; font-weight: bold; background: #d4edda; border-radius: 3px;">✓ Sent ({})</span>',
+                khazenly_order_display
             )
         elif obj.paid:
-            # Paid but no Khazenly order - show clickable send button
+            pill_num = obj.pill_number if obj.pill_number else str(obj.pk)
             return format_html(
                 '<a href="/admin/products/pill/{}/send_to_khazenly/" '
                 'class="button" '
                 'style="background: #28a745; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; border: none; cursor: pointer;" '
                 'onclick="return confirm(\'Are you sure you want to send Pill {} to Khazenly?\');">'
                 '🚀 Send to Khazenly</a>',
-                obj.id,
-                obj.pill_number
+                obj.pk,
+                pill_num
             )
         else:
-            # Not paid - show why it can't be sent
             return format_html(
                 '<span style="color: #6c757d; padding: 3px 8px; font-style: italic; background: #f8f9fa; border-radius: 3px;">💸 Not Paid</span>'
             )

@@ -16,7 +16,9 @@ from .models import User, UserAddress, UserProfileImage
 from django.contrib.auth import update_session_auth_hash
 from rest_framework import generics
 from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import Count
+from django.db.models import Count, Q
+from django_filters import rest_framework as django_filters
+from products.models import PillAddress
 from permissions import IsAdminOrHasEndpointPermission
 
 
@@ -335,6 +337,23 @@ class UserProfileImageRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAP
 
 # user analysis
 
+class PillAddressGovernmentFilter(django_filters.FilterSet):
+    government = django_filters.CharFilter(method='filter_by_pill_address_government')
+
+    class Meta:
+        model = User
+        fields = ['government', 'year', 'is_staff', 'is_superuser', 'division']
+
+    def filter_by_pill_address_government(self, queryset, name, value):
+        if not value:
+            return queryset
+        matching_user_ids = PillAddress.objects.filter(
+            government=value,
+            pill__user__isnull=False,
+        ).values('pill__user_id').distinct()
+        return queryset.filter(pk__in=matching_user_ids)
+
+
 class AdminUserListView(generics.ListAPIView):
     serializer_class = UserSerializer
     # permission_classes = [IsAdminUser]
@@ -342,15 +361,15 @@ class AdminUserListView(generics.ListAPIView):
         'pills',
         'loved_products'
     ).order_by('-created_at')
-    
-    filter_backends = [SearchFilter, OrderingFilter,DjangoFilterBackend]
+
+    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend]
     ordering_fields = [
-        'created_at', 
-        'cart_items_count', 
+        'created_at',
+        'cart_items_count',
         'loved_count'
     ]
-    search_fields = ['username', 'name', 'email', 'phone','address', 'government', 'city']
-    filterset_fields = ['is_staff', 'is_superuser','year', 'division', 'government']
+    search_fields = ['username', 'name', 'email', 'phone', 'address', 'government', 'city']
+    filterset_class = PillAddressGovernmentFilter
 
 
 class AdminUserDetailView(generics.RetrieveAPIView):
