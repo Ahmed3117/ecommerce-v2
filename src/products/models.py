@@ -557,6 +557,10 @@ class Pill(models.Model):
         default=False,
         help_text="Indicates if the stock problem has been resolved"
     )
+    inventory_deducted = models.BooleanField(
+        default=False,
+        help_text="Tracks whether inventory was already deducted for this paid pill"
+    )
     
     def save(self, *args, **kwargs):
         if not self.pill_number:
@@ -597,7 +601,7 @@ class Pill(models.Model):
                     status_log.changed_at = timezone.now()
                     status_log.save()
 
-                if self.status in ['c', 'r'] and old_status == 'd':
+                if self.status in ['c', 'r'] and self.inventory_deducted:
                     self.restore_inventory()
 
                 self.items.update(status=self.status)
@@ -619,6 +623,7 @@ class Pill(models.Model):
 
         # Create Khazenly order if paid was just set to True
         if is_newly_paid:
+            self._handle_successful_payment_inventory()
             self._create_khazenly_order()
         
         # Check for stock problems if pill is paid and not already resolved
@@ -745,6 +750,290 @@ class Pill(models.Model):
             logger.error(f"Error checking stock problems for pill {self.pill_number}: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def _handle_successful_payment_inventory(self):
+        """
+        Reserve inventory for a newly paid pill, then cancel pending invoices for
+        any products that have become fully unavailable.
+        """
+        reservation_result = self.reserve_inventory_for_payment()
+        depleted_product_ids = reservation_result.get('depleted_product_ids', [])
+
+        if depleted_product_ids:
+            self.cancel_conflicting_pending_invoices(depleted_product_ids)
+
+    def _build_stock_problem_item(self, pill_item, available_quantity, reason, error=None):
+        return {
+            'pill_item_id': pill_item.id,
+            'product_id': pill_item.product.id,
+            'product_name': pill_item.product.name,
+            'size': pill_item.size,
+            'color': pill_item.color.name if pill_item.color else None,
+            'required_quantity': pill_item.quantity,
+            'available_quantity': available_quantity,
+            'reason': reason,
+            'error': error
+        }
+
+    def _set_stock_problem_state(self, problem_items):
+        Pill.objects.filter(pk=self.pk).update(
+            has_stock_problem=bool(problem_items),
+            stock_problem_items=problem_items or None,
+            is_resolved=not bool(problem_items)
+        )
+        self.has_stock_problem = bool(problem_items)
+        self.stock_problem_items = problem_items or None
+        self.is_resolved = not bool(problem_items)
+
+    def _get_depleted_product_ids(self, product_ids):
+        depleted_product_ids = []
+
+        for product in Product.objects.filter(id__in=product_ids).distinct():
+            if product.total_quantity() <= 0:
+                depleted_product_ids.append(product.id)
+
+        return depleted_product_ids
+
+    def reserve_inventory_for_payment(self):
+        """
+        Deduct inventory once when payment is confirmed.
+
+        If the paid pill cannot be fully reserved, we keep the payment state but
+        mark it with a stock problem so the admin can investigate.
+        """
+        if self.inventory_deducted:
+            return {
+                'success': True,
+                'already_deducted': True,
+                'depleted_product_ids': self._get_depleted_product_ids(
+                    self.items.values_list('product_id', flat=True)
+                )
+            }
+
+        product_ids = set()
+        locked_availabilities = []
+        problem_items = []
+
+        try:
+            with transaction.atomic():
+                for item in self.items.select_related('product', 'color').all():
+                    product_ids.add(item.product_id)
+
+                    try:
+                        availability = ProductAvailability.objects.select_for_update().get(
+                            product=item.product,
+                            size=item.size,
+                            color=item.color
+                        )
+                    except ProductAvailability.DoesNotExist:
+                        problem_items.append(
+                            self._build_stock_problem_item(
+                                item,
+                                available_quantity=0,
+                                reason='no_availability_record'
+                            )
+                        )
+                        continue
+
+                    if availability.quantity <= 0:
+                        problem_items.append(
+                            self._build_stock_problem_item(
+                                item,
+                                available_quantity=0,
+                                reason='out_of_stock'
+                            )
+                        )
+                        continue
+
+                    if availability.quantity < item.quantity:
+                        problem_items.append(
+                            self._build_stock_problem_item(
+                                item,
+                                available_quantity=availability.quantity,
+                                reason='insufficient_quantity'
+                            )
+                        )
+                        continue
+
+                    locked_availabilities.append((availability, item.quantity))
+
+                if problem_items:
+                    logger.warning(
+                        f"Could not reserve full inventory for paid pill {self.pill_number}: "
+                        f"{len(problem_items)} stock issue(s)"
+                    )
+                    self._set_stock_problem_state(problem_items)
+                    return {
+                        'success': False,
+                        'already_deducted': False,
+                        'problem_items': problem_items,
+                        'depleted_product_ids': self._get_depleted_product_ids(product_ids)
+                    }
+
+                for availability, reserved_quantity in locked_availabilities:
+                    availability.quantity -= reserved_quantity
+                    availability.save(update_fields=['quantity'])
+
+                Pill.objects.filter(pk=self.pk).update(
+                    inventory_deducted=True,
+                    has_stock_problem=False,
+                    stock_problem_items=None,
+                    is_resolved=True
+                )
+                self.inventory_deducted = True
+                self.has_stock_problem = False
+                self.stock_problem_items = None
+                self.is_resolved = True
+
+        except Exception as e:
+            logger.error(f"Error reserving inventory for pill {self.pill_number}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'already_deducted': False,
+                'problem_items': [
+                    {
+                        'reason': 'error',
+                        'error': str(e)
+                    }
+                ],
+                'depleted_product_ids': self._get_depleted_product_ids(product_ids)
+            }
+
+        depleted_product_ids = self._get_depleted_product_ids(product_ids)
+        logger.info(
+            f"Reserved inventory for paid pill {self.pill_number}. "
+            f"Depleted products: {depleted_product_ids}"
+        )
+        return {
+            'success': True,
+            'already_deducted': False,
+            'problem_items': [],
+            'depleted_product_ids': depleted_product_ids
+        }
+
+    def _mark_invoice_as_cancelled(self, gateway, reason):
+        cancelled_at = timezone.now().isoformat()
+
+        if gateway == 'easypay':
+            data = self.easypay_data or {}
+            invoice_details = data.get('invoice_details', {})
+            invoice_details['payment_status'] = 'cancelled'
+            data['invoice_details'] = invoice_details
+            data['system_status'] = 'cancelled'
+            data['cancelled_at'] = cancelled_at
+            data['cancel_reason'] = reason
+            self.easypay_data = data
+            self.save(update_fields=['easypay_data'])
+            return
+
+        if gateway == 'shakeout':
+            data = self.shakeout_data or {}
+            data['system_status'] = 'cancelled'
+            data['cancelled_at'] = cancelled_at
+            data['cancel_reason'] = reason
+            self.shakeout_data = data
+            self.save(update_fields=['shakeout_data'])
+
+    def cancel_pending_payment_invoice(self, reason):
+        """Cancel a pending EasyPay or Shake-out invoice for this pill."""
+        if self.paid:
+            return {
+                'success': False,
+                'skipped': True,
+                'reason': 'pill_already_paid'
+            }
+
+        try:
+            if self.payment_gateway == 'easypay' or self.easypay_fawry_ref:
+                if not self.easypay_fawry_ref:
+                    return {
+                        'success': False,
+                        'skipped': True,
+                        'reason': 'missing_easypay_fawry_ref'
+                    }
+
+                from services.easypay_service import easypay_service
+
+                result = easypay_service.cancel_invoice(self.easypay_fawry_ref)
+                if result.get('success'):
+                    self._mark_invoice_as_cancelled('easypay', reason)
+                return result
+
+            if self.payment_gateway == 'shakeout' or self.shakeout_invoice_id:
+                if not self.shakeout_invoice_id or not self.shakeout_invoice_ref:
+                    return {
+                        'success': False,
+                        'skipped': True,
+                        'reason': 'missing_shakeout_invoice_identifiers'
+                    }
+
+                from services.shakeout_service import shakeout_service
+
+                result = shakeout_service.cancel_invoice(
+                    self.shakeout_invoice_id,
+                    self.shakeout_invoice_ref
+                )
+                if result.get('success'):
+                    self._mark_invoice_as_cancelled('shakeout', reason)
+                return result
+
+            return {
+                'success': False,
+                'skipped': True,
+                'reason': 'no_payment_invoice'
+            }
+        except Exception as e:
+            logger.error(
+                f"Error cancelling payment invoice for pill {self.pill_number}: {str(e)}"
+            )
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def cancel_conflicting_pending_invoices(self, depleted_product_ids):
+        """Cancel unpaid payment invoices that contain products with no stock left."""
+        if not depleted_product_ids:
+            return []
+
+        affected_products = list(
+            Product.objects.filter(id__in=depleted_product_ids).values_list('name', flat=True)
+        )
+        cancel_reason = (
+            "Cancelled automatically because stock finished for: "
+            + ", ".join(affected_products)
+        )
+
+        pending_pills = (
+            Pill.objects.filter(
+                paid=False,
+                items__product_id__in=depleted_product_ids
+            )
+            .exclude(pk=self.pk)
+            .exclude(status__in=['c', 'r', 'd'])
+            .distinct()
+        )
+
+        cancellation_results = []
+        for pending_pill in pending_pills:
+            pending_pill.update_stock_problem_status()
+            result = pending_pill.cancel_pending_payment_invoice(cancel_reason)
+            cancellation_results.append({
+                'pill_id': pending_pill.id,
+                'pill_number': pending_pill.pill_number,
+                'success': result.get('success', False),
+                'result': result
+            })
+
+        if cancellation_results:
+            logger.info(
+                f"Automatic invoice cancellation triggered by pill {self.pill_number}: "
+                f"{cancellation_results}"
+            )
+
+        return cancellation_results
     
 
     @property
@@ -1004,6 +1293,13 @@ class Pill(models.Model):
         
         # Check if invoice status indicates it's no longer valid
         if self.shakeout_data:
+            if self.shakeout_data.get('system_status', '').lower() == 'cancelled':
+                logger.info(
+                    f"Shake-out invoice {self.shakeout_invoice_id} for pill "
+                    f"{self.pill_number} was cancelled by the system"
+                )
+                return True
+
             # Check webhook history for failure/expiry status
             webhooks = self.shakeout_data.get('webhooks', [])
             for webhook in reversed(webhooks):  # Check most recent first
@@ -1034,11 +1330,19 @@ class Pill(models.Model):
             return True
         
         # Check if invoice status indicates it's no longer valid
-        if self.easypay_data and 'invoice_details' in self.easypay_data:
-            payment_status = self.easypay_data['invoice_details'].get('payment_status', '').lower()
-            if payment_status in ['expired', 'cancelled', 'failed']:
-                logger.info(f"EasyPay invoice {self.easypay_invoice_uid} for pill {self.pill_number} has status: {payment_status}")
+        if self.easypay_data:
+            if self.easypay_data.get('system_status', '').lower() == 'cancelled':
+                logger.info(
+                    f"EasyPay invoice {self.easypay_invoice_uid} for pill "
+                    f"{self.pill_number} was cancelled by the system"
+                )
                 return True
+
+            if 'invoice_details' in self.easypay_data:
+                payment_status = self.easypay_data['invoice_details'].get('payment_status', '').lower()
+                if payment_status in ['expired', 'cancelled', 'failed']:
+                    logger.info(f"EasyPay invoice {self.easypay_invoice_uid} for pill {self.pill_number} has status: {payment_status}")
+                    return True
         
         return False
 
@@ -1072,6 +1376,9 @@ class Pill(models.Model):
 
     def restore_inventory(self):
         """Restore inventory quantities for all items in the pill"""
+        if not self.inventory_deducted:
+            return
+
         with transaction.atomic():
             for item in self.items.all():
                 try:
@@ -1081,12 +1388,22 @@ class Pill(models.Model):
                         color=item.color
                     )
                     availability.quantity += item.quantity
-                    availability.save()
+                    availability.save(update_fields=['quantity'])
                 except ProductAvailability.DoesNotExist:
                     continue
 
+            Pill.objects.filter(pk=self.pk).update(inventory_deducted=False)
+            self.inventory_deducted = False
+
     def process_delivery(self):
         """Process items when pill is marked as delivered"""
+        if self.inventory_deducted:
+            logger.info(
+                f"Skipping delivery stock deduction for pill {self.pill_number} "
+                f"because inventory was already deducted on payment"
+            )
+            return
+
         with transaction.atomic():
             for item in self.items.all():
                 try:
@@ -1299,7 +1616,11 @@ class Pill(models.Model):
                     'required_quantity': pill_item.quantity
                 }
             
-            if availability.quantity <= 0:
+            effective_available_quantity = availability.quantity
+            if self.inventory_deducted:
+                effective_available_quantity += pill_item.quantity
+
+            if effective_available_quantity <= 0:
                 return {
                     'available': False,
                     'reason': 'out_of_stock',
@@ -1307,17 +1628,17 @@ class Pill(models.Model):
                     'required_quantity': pill_item.quantity
                 }
             
-            if availability.quantity < pill_item.quantity:
+            if effective_available_quantity < pill_item.quantity:
                 return {
                     'available': False,
                     'reason': 'insufficient_quantity',
-                    'available_quantity': availability.quantity,
+                    'available_quantity': effective_available_quantity,
                     'required_quantity': pill_item.quantity
                 }
             
             return {
                 'available': True,
-                'available_quantity': availability.quantity,
+                'available_quantity': effective_available_quantity,
                 'required_quantity': pill_item.quantity
             }
             

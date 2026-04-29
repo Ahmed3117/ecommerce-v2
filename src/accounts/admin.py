@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.http import HttpResponse
 from django.utils.html import format_html
+import csv
 from products.models import PillAddress
 from .models import GOVERNMENT_CHOICES, User, UserAddress, UserProfileImage
 
@@ -33,6 +35,7 @@ class UserAddressInline(admin.TabularInline):
 class UserAdmin(BaseUserAdmin):
     list_display = ('username', 'name', 'email', 'phone', 'user_type', 'is_staff', 'get_profile_image_preview')
     list_filter = ('user_type', 'is_staff', 'is_superuser', 'is_active', 'groups', PillAddressGovernmentFilter, 'year')
+    actions = ['export_users_csv']
     search_fields = ('username', 'name', 'email', 'phone')
     ordering = ('-date_joined',)
     fieldsets = (
@@ -52,6 +55,40 @@ class UserAdmin(BaseUserAdmin):
         if obj.user_profile_image and obj.user_profile_image.image:
             return format_html('<img src="{}" width="40" height="40" style="border-radius:50%;" />', obj.user_profile_image.image.url)
         return "No Image"
+
+    @admin.action(description='Export selected users to CSV')
+    def export_users_csv(self, request, queryset):
+        cl = self.get_changelist_instance(request)
+        full_queryset = cl.queryset
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="users.csv"'
+        writer = csv.writer(response)
+        writer.writerow([
+            'id', 'username', 'name', 'email', 'phone', 'phone2',
+            'user_type', 'year', 'division', 'government', 'city', 'address',
+            'is_active', 'is_staff', 'is_superuser', 'date_joined', 'last_login',
+        ])
+        for user in full_queryset.order_by('-date_joined'):
+            writer.writerow([
+                user.id,
+                user.username,
+                user.name,
+                user.email,
+                user.phone,
+                user.phone2,
+                user.user_type,
+                user.year,
+                user.division,
+                user.government,
+                user.city,
+                user.address,
+                user.is_active,
+                user.is_staff,
+                user.is_superuser,
+                user.date_joined,
+                user.last_login,
+            ])
+        return response
 
 @admin.register(UserAddress)
 class UserAddressAdmin(admin.ModelAdmin):

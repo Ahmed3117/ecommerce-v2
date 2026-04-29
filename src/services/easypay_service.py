@@ -386,6 +386,88 @@ class EasyPayService:
                 'error': f"Unexpected error: {str(e)}"
             }
 
+    def cancel_invoice(self, ref_number):
+        """
+        Cancel an unpaid EasyPay invoice.
+
+        The project stores the EasyPay `fawry_ref`, which is the identifier we use
+        here as `ref_number`.
+        """
+        try:
+            logger.info(f"Cancelling EasyPay invoice with ref_number: {ref_number}")
+
+            signature_string = f"{ref_number}{self.vendor_code}{self.secret_key}"
+            signature = hashlib.sha256(signature_string.encode("utf-8")).hexdigest()
+
+            payload = {
+                "vendor_code": self.vendor_code,
+                "ref_number": ref_number,
+                "signature": signature
+            }
+
+            cancel_url = f"{self.base_url}/invoice-cancel/"
+            response = requests.post(
+                cancel_url,
+                headers=self.headers,
+                json=payload,
+                timeout=30
+            )
+
+            logger.info(f"EasyPay cancel response status: {response.status_code}")
+            logger.info(f"EasyPay cancel response text: {response.text}")
+
+            if response.status_code == 200:
+                if not response.text or not response.text.strip():
+                    return {
+                        'success': True,
+                        'data': {}
+                    }
+
+                try:
+                    return {
+                        'success': True,
+                        'data': response.json()
+                    }
+                except json.JSONDecodeError:
+                    return {
+                        'success': True,
+                        'data': {'raw_response': response.text}
+                    }
+
+            try:
+                error_data = response.json()
+                error_message = error_data.get(
+                    'error',
+                    error_data.get('message', error_data.get('detail', f'HTTP {response.status_code}'))
+                )
+            except json.JSONDecodeError:
+                error_message = f'HTTP {response.status_code}: {response.text[:200]}'
+
+            logger.error(f"EasyPay cancel API error: {error_message}")
+            return {
+                'success': False,
+                'error': error_message
+            }
+
+        except requests.exceptions.Timeout:
+            logger.error("EasyPay cancel API request timed out")
+            return {
+                'success': False,
+                'error': 'EasyPay cancel API request timed out'
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"EasyPay cancel API request failed: {str(e)}")
+            return {
+                'success': False,
+                'error': f'EasyPay cancel API request failed: {str(e)}'
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error cancelling EasyPay invoice: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Unexpected error: {str(e)}'
+            }
+
     def resend_invoice_notification(self, fawry_ref):
         """Manually trigger invoice notification resend from EasyPay"""
         try:

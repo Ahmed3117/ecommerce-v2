@@ -330,6 +330,71 @@ class ShakeoutService:
             logger.error(f"Exception checking payment status: {e}")
             return {'success': False, 'error': str(e)}
 
+    def cancel_invoice(self, invoice_id, invoice_ref):
+        """Cancel a pending Shake-out invoice."""
+        try:
+            cancel_url = f"{self.base_url}/invoice/cancel/{invoice_id}/{invoice_ref}"
+            logger.info(f"Cancelling Shake-out invoice via {cancel_url}")
+
+            response = requests.post(
+                cancel_url,
+                headers=self.headers,
+                timeout=30
+            )
+
+            logger.info(f"Shake-out cancel response status: {response.status_code}")
+            logger.info(f"Shake-out cancel response text: {response.text}")
+
+            if response.status_code in [200, 201]:
+                if not response.text or not response.text.strip():
+                    return {
+                        'success': True,
+                        'data': {}
+                    }
+
+                try:
+                    return {
+                        'success': True,
+                        'data': response.json()
+                    }
+                except json.JSONDecodeError:
+                    return {
+                        'success': True,
+                        'data': {'raw_response': response.text}
+                    }
+
+            try:
+                error_data = response.json()
+                error_message = error_data.get(
+                    'message',
+                    error_data.get('error', f'HTTP {response.status_code}')
+                )
+            except json.JSONDecodeError:
+                error_message = f'HTTP {response.status_code}: {response.text[:200]}'
+
+            return {
+                'success': False,
+                'error': error_message
+            }
+
+        except requests.exceptions.Timeout:
+            return {
+                'success': False,
+                'error': 'Shake-out cancel API request timed out'
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error cancelling Shake-out invoice: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Network error: {str(e)}'
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error cancelling Shake-out invoice: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Unexpected error: {str(e)}'
+            }
+
     def _handle_api_error_response(self, response_data):
         """Handle different API error response formats and unify them"""
         # Handle case where success=False in response
