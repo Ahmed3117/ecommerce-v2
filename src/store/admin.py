@@ -1,5 +1,6 @@
 from django.contrib import admin
-from django.utils.html import format_html
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from .models import StoreRequest, Store, StoreReporting
 from accounts.models import User
 
@@ -23,13 +24,15 @@ class StoreRequestAdmin(admin.ModelAdmin):
     @admin.display(description='Store Image')
     def get_image_preview(self, obj):
         if obj.image:
-            return format_html('<a href="{0}" target="_blank"><img src="{0}" width="100"/></a>', obj.image.url)
+            image_url = escape(obj.image.url)
+            return mark_safe(f'<a href="{image_url}" target="_blank"><img src="{image_url}" width="100"/></a>')
         return "No Image"
 
     @admin.display(description='National ID')
     def get_national_id_preview(self, obj):
         if obj.national_id_image:
-            return format_html('<a href="{0}" target="_blank"><img src="{0}" width="100"/></a>', obj.national_id_image.url)
+            image_url = escape(obj.national_id_image.url)
+            return mark_safe(f'<a href="{image_url}" target="_blank"><img src="{image_url}" width="100"/></a>')
         return "No Image"
 
     @admin.action(description='Accept selected requests and create stores')
@@ -101,13 +104,15 @@ class StoreAdmin(admin.ModelAdmin):
     @admin.display(description='Store Image')
     def get_image_preview(self, obj):
         if obj.image:
-            return format_html('<a href="{0}" target="_blank"><img src="{0}" width="100"/></a>', obj.image.url)
+            image_url = escape(obj.image.url)
+            return mark_safe(f'<a href="{image_url}" target="_blank"><img src="{image_url}" width="100"/></a>')
         return "No Image"
 
     @admin.display(description='National ID')
     def get_national_id_preview(self, obj):
         if obj.national_id_image:
-            return format_html('<a href="{0}" target="_blank"><img src="{0}" width="100"/></a>', obj.national_id_image.url)
+            image_url = escape(obj.national_id_image.url)
+            return mark_safe(f'<a href="{image_url}" target="_blank"><img src="{image_url}" width="100"/></a>')
         return "No Image"
 
 

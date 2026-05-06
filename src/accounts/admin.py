@@ -1,7 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.http import HttpResponse
-from django.utils.html import format_html
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 import csv
 from products.models import PillAddress
 from .models import GOVERNMENT_CHOICES, User, UserAddress, UserProfileImage
@@ -53,7 +54,10 @@ class UserAdmin(BaseUserAdmin):
     @admin.display(description='Profile Image')
     def get_profile_image_preview(self, obj):
         if obj.user_profile_image and obj.user_profile_image.image:
-            return format_html('<img src="{}" width="40" height="40" style="border-radius:50%;" />', obj.user_profile_image.image.url)
+            return mark_safe(
+                f'<img src="{escape(obj.user_profile_image.image.url)}" width="40" height="40" '
+                'style="border-radius:50%;" />'
+            )
         return "No Image"
 
     @admin.action(description='Export selected users to CSV')
@@ -106,5 +110,5 @@ class UserProfileImageAdmin(admin.ModelAdmin):
     @admin.display(description='Image Preview')
     def get_image_preview(self, obj):
         if obj.image:
-            return format_html('<img src="{}" width="100" />', obj.image.url)
+            return mark_safe(f'<img src="{escape(obj.image.url)}" width="100" />')
         return "No Image"

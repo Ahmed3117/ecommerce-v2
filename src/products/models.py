@@ -203,6 +203,16 @@ class Product(models.Model):
         default=True,
         help_text="Mark if this product is active"
     )
+    note = models.TextField(
+        max_length=1500,
+        null=True,
+        blank=True,
+        help_text="Internal note for the product (max 1500 characters)"
+    )
+    show_note_to_clients = models.BooleanField(
+        default=False,
+        help_text="Show this note to clients on product details and lists"
+    )
     
     def get_current_discount(self):
         """Returns the best active discount (either product or category level)"""
