@@ -102,6 +102,14 @@ class ActiveBestProductsView(generics.ListAPIView):
         return BestProduct.objects.filter(is_active=True, product__is_active=True).order_by('-order')
 
 
+class SimpleProductListView(generics.ListAPIView):
+    serializer_class = SimpleProductSerializer
+    permission_classes = [AllowAny]
+    pagination_class = None
+
+    def get_queryset(self):
+        return Product.objects.filter(is_active=True).order_by('name')
+
 
 class CombinedProductsView(APIView):
     permission_classes = [AllowAny]

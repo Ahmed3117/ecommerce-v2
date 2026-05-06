@@ -1,7 +1,8 @@
 from django.conf import settings
 from django.contrib import admin
 from django.db.models import Sum
-from django.utils.html import format_html
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django.utils import timezone
 from django.http import HttpResponse
 from .models import (
@@ -63,7 +64,7 @@ class CategoryAdmin(admin.ModelAdmin):
     @admin.display(description='Image')
     def get_image_preview(self, obj):
         if obj.image:
-            return format_html('<img src="{}" width="50" height="50" />', obj.image.url)
+            return mark_safe(f'<img src="{escape(obj.image.url)}" width="50" height="50" />')
         return "No Image"
 
 # FIX: Added a dedicated admin for SubCategory with search_fields
@@ -82,7 +83,7 @@ class BrandAdmin(admin.ModelAdmin):
     @admin.display(description='Logo')
     def get_logo_preview(self, obj):
         if obj.logo:
-            return format_html('<img src="{}" width="50" height="50" />', obj.logo.url)
+            return mark_safe(f'<img src="{escape(obj.logo.url)}" width="50" height="50" />')
         return "No Logo"
 
 @admin.register(Subject)
@@ -131,7 +132,7 @@ class ProductAdmin(admin.ModelAdmin):
     @admin.display(description='Image')
     def get_base_image_preview(self, obj):
         if obj.base_image:
-            return format_html('<img src="{}" width="50" height="50" />', obj.base_image.url)
+            return mark_safe(f'<img src="{escape(obj.base_image.url)}" width="50" height="50" />')
         return "No Image"
     
     @admin.display(description='Total Quantity', ordering='total_quantity')
@@ -257,18 +258,18 @@ class PillAdmin(admin.ModelAdmin):
 
     def khazenly_status(self, obj):
         if obj.has_khazenly_order:
-            return format_html('<span style="color: green;">✓ Created</span>')
+            return mark_safe('<span style="color: green;">✓ Created</span>')
         elif obj.is_shipped:
-            return format_html('<span style="color: orange;">⚠ Pending</span>')
+            return mark_safe('<span style="color: orange;">⚠ Pending</span>')
         else:
-            return format_html('<span style="color: gray;">-</span>')
+            return mark_safe('<span style="color: gray;">-</span>')
     khazenly_status.short_description = 'Khazenly'
 
     def stock_problem_status(self, obj):
         """Display stock problem status with color coding"""
         if obj.has_stock_problem:
             if obj.is_resolved:
-                return format_html('<span style="color: #28a745; font-weight: bold;">✓ Resolved</span>')
+                return mark_safe('<span style="color: #28a745; font-weight: bold;">✓ Resolved</span>')
             else:
                 stock_items = obj.stock_problem_items
                 if stock_items is None:
@@ -277,12 +278,12 @@ class PillAdmin(admin.ModelAdmin):
                     problem_count = len(stock_items)
                 else:
                     problem_count = 0
-                return format_html(
-                    '<span style="color: #dc3545; font-weight: bold;">⚠ Problem ({} items)</span>',
-                    problem_count
+                return mark_safe(
+                    f'<span style="color: #dc3545; font-weight: bold;">'
+                    f'⚠ Problem ({escape(problem_count)} items)</span>'
                 )
         else:
-            return format_html('<span style="color: #6c757d;">-</span>')
+            return mark_safe('<span style="color: #6c757d;">-</span>')
     
     stock_problem_status.short_description = 'Stock Status'
     stock_problem_status.admin_order_field = 'has_stock_problem'
@@ -346,23 +347,23 @@ class PillAdmin(admin.ModelAdmin):
         """Add manual Khazenly action button for each row"""
         khazenly_order_display = obj.khazenly_sales_order_number if obj.khazenly_sales_order_number else 'Created'
         if obj.has_khazenly_order:
-            return format_html(
-                '<span style="color: green; padding: 3px 8px; font-weight: bold; background: #d4edda; border-radius: 3px;">✓ Sent ({})</span>',
-                khazenly_order_display
+            return mark_safe(
+                '<span style="color: green; padding: 3px 8px; font-weight: bold; '
+                f'background: #d4edda; border-radius: 3px;">✓ Sent ({escape(khazenly_order_display)})</span>'
             )
         elif obj.paid:
             pill_num = obj.pill_number if obj.pill_number else str(obj.pk)
-            return format_html(
-                '<a href="/admin/products/pill/{}/send_to_khazenly/" '
+            return mark_safe(
+                f'<a href="/admin/products/pill/{escape(obj.pk)}/send_to_khazenly/" '
                 'class="button" '
-                'style="background: #28a745; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; border: none; cursor: pointer;" '
-                'onclick="return confirm(\'Are you sure you want to send Pill {} to Khazenly?\');">'
-                '🚀 Send to Khazenly</a>',
-                obj.pk,
-                pill_num
+                'style="background: #28a745; color: white; padding: 6px 12px; '
+                'text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: bold; '
+                'display: inline-block; border: none; cursor: pointer;" '
+                f'onclick="return confirm(\'Are you sure you want to send Pill {escape(pill_num)} to Khazenly?\');">'
+                '🚀 Send to Khazenly</a>'
             )
         else:
-            return format_html(
+            return mark_safe(
                 '<span style="color: #6c757d; padding: 3px 8px; font-style: italic; background: #f8f9fa; border-radius: 3px;">💸 Not Paid</span>'
             )
 
@@ -898,7 +899,8 @@ class PayRequestAdmin(admin.ModelAdmin):
     @admin.display(description='Image')
     def get_image_preview(self, obj):
         if obj.image:
-            return format_html('<a href="{0}" target="_blank"><img src="{0}" width="100"/></a>', obj.image.url)
+            image_url = escape(obj.image.url)
+            return mark_safe(f'<a href="{image_url}" target="_blank"><img src="{image_url}" width="100"/></a>')
         return "No Image"
 
     @admin.action(description='Mark selected requests as applied')
@@ -916,7 +918,7 @@ class SpecialProductAdmin(admin.ModelAdmin):
     @admin.display(description='Special Image')
     def get_image_preview(self, obj):
         if obj.special_image:
-            return format_html('<img src="{}" width="50" height="50" />', obj.special_image.url)
+            return mark_safe(f'<img src="{escape(obj.special_image.url)}" width="50" height="50" />')
         return "No Image"
 
 @admin.register(PillGift)
