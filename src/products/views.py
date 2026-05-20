@@ -1565,7 +1565,11 @@ class OverTaxConfigView(APIView):
         from products.serializers import OverTaxConfigSerializer
         config = OverTaxConfig.get_active_config()
         if not config:
-             config = OverTaxConfig.objects.create()
+            # Return the most recent config if no active one exists,
+            # only create a default if the table is completely empty.
+            config = OverTaxConfig.objects.order_by('-created_at').first()
+            if not config:
+                config = OverTaxConfig.objects.create()
         serializer = OverTaxConfigSerializer(config)
         return Response(serializer.data)
 

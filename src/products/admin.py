@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib import admin
+from django.db import transaction
 from django.db.models import Sum
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
@@ -1081,10 +1082,11 @@ class OverTaxConfigAdmin(admin.ModelAdmin):
         return super().get_queryset(request).order_by('-created_at')
 
     def save_model(self, request, obj, form, change):
-        # Ensure only one active configuration
-        if obj.is_active:
-            OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
-        super().save_model(request, obj, form, change)
+        with transaction.atomic():
+            # Ensure only one active configuration
+            if obj.is_active:
+                OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
+            super().save_model(request, obj, form, change)
 
 
 @admin.register(FreeShippingOffer)
