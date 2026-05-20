@@ -1545,9 +1545,8 @@ class Pill(models.Model):
         if not tax_config:
             return 0.0
         
-        # Count total quantity of items in the pill
-        # total_quantity = sum(item.quantity for item in self.items.all())
-        total_quantity = self.items.count()
+        # Count total quantity of items in the pill (quantity of each item summed)
+        total_quantity = sum(item.quantity for item in self.items.all())
         
         # Calculate items that exceed the threshold
         items_over_threshold = max(0, total_quantity - tax_config.max_products_without_tax)

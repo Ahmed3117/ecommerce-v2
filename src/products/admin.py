@@ -1066,7 +1066,7 @@ class OverTaxConfigAdmin(admin.ModelAdmin):
     list_filter = ['is_active', 'created_at']
     search_fields = ['max_products_without_tax', 'tax_amount_per_item']
     readonly_fields = ['created_at', 'updated_at']
-    
+
     fieldsets = (
         ('Tax Configuration', {
             'fields': ('max_products_without_tax', 'tax_amount_per_item', 'is_active')
@@ -1076,10 +1076,10 @@ class OverTaxConfigAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     def get_queryset(self, request):
         return super().get_queryset(request).order_by('-created_at')
-    
+
     def save_model(self, request, obj, form, change):
         # Ensure only one active configuration
         if obj.is_active:
