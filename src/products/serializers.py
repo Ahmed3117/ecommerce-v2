@@ -1107,6 +1107,7 @@ class PillDetailSerializer(serializers.ModelSerializer):
     pilladdress = PillAddressSerializer(read_only=True)
     gift_discount = PillGiftSerializer(read_only=True)
     shipping_price = serializers.SerializerMethodField()
+    over_tax_price = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     user_username = serializers.SerializerMethodField()
@@ -1128,12 +1129,12 @@ class PillDetailSerializer(serializers.ModelSerializer):
         model = Pill
         fields = [
             'id','pill_number','tracking_number', 'user_name', 'user_username', 'user_phone','user_parent_phone' ,'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
-            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
+            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'over_tax_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
         read_only_fields = [
             'id','pill_number', 'tracking_number','user_name', 'user_username', 'items', 'status', 'status_display', 'date_added', 'paid', 'coupon', 'pilladdress', 'gift_discount',
-            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
+            'price_without_coupons_or_gifts', 'coupon_discount', 'gift_discount', 'shipping_price', 'over_tax_price', 'final_price', 'status_logs', 'pay_requests','shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid','easypay_fawry_ref', 'easypay_invoice_sequence', 'easypay_invoice_url', 'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
 
@@ -1151,6 +1152,9 @@ class PillDetailSerializer(serializers.ModelSerializer):
     
     def get_shipping_price(self, obj):
         return obj.shipping_price()
+
+    def get_over_tax_price(self, obj):
+        return obj.calculate_over_tax_price()
 
     def get_status_display(self, obj):
         return obj.get_status_display()
@@ -1188,6 +1192,7 @@ class PillSerializer(serializers.ModelSerializer):
     coupon = CouponDiscountSerializer(read_only=True)
     gift_discount = PillGiftSerializer(read_only=True)
     shipping_price = serializers.SerializerMethodField()
+    over_tax_price = serializers.SerializerMethodField()
     status_display = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     user_username = serializers.SerializerMethodField()
@@ -1221,7 +1226,7 @@ class PillSerializer(serializers.ModelSerializer):
             'status_display', 'date_added', 'paid', 'coupon', 'name', 'email', 
             'phone', 'address', 'government', 'city', 'pay_method', 'gift_discount',
             'price_without_coupons_or_gifts', 'coupon_discount', 'shipping_price', 
-            'final_price', 'shakeout_invoice_id', 'shakeout_invoice_url',
+            'over_tax_price', 'final_price', 'shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
             'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
@@ -1230,7 +1235,7 @@ class PillSerializer(serializers.ModelSerializer):
             'status', 'status_display', 'date_added', 'paid', 'coupon', 'name', 
             'email', 'phone', 'address', 'government', 'city', 'pay_method',
             'gift_discount', 'price_without_coupons_or_gifts', 'coupon_discount', 
-            'shipping_price', 'final_price', 'items_count','shakeout_invoice_id', 'shakeout_invoice_url',
+            'shipping_price', 'over_tax_price', 'final_price', 'items_count','shakeout_invoice_id', 'shakeout_invoice_url',
             'easypay_invoice_uid', 'easypay_invoice_sequence', 'easypay_invoice_url',
             'payment_gateway', 'payment_url', 'payment_status', 'khazenly_sales_order_number'
         ]
@@ -1249,6 +1254,9 @@ class PillSerializer(serializers.ModelSerializer):
 
     def get_shipping_price(self, obj):
         return obj.shipping_price()
+
+    def get_over_tax_price(self, obj):
+        return obj.calculate_over_tax_price()
 
     def get_status_display(self, obj):
         return obj.get_status_display()

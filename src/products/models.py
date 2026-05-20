@@ -2292,10 +2292,11 @@ class OverTaxConfig(models.Model):
         return cls.objects.filter(is_active=True).first()
 
     def save(self, *args, **kwargs):
-        # Ensure only one active configuration exists
-        if self.is_active:
-            OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            # Ensure only one active configuration exists
+            if self.is_active:
+                OverTaxConfig.objects.filter(is_active=True).update(is_active=False)
+            super().save(*args, **kwargs)
 
 
 class FreeShippingOffer(models.Model):
