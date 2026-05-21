@@ -505,7 +505,9 @@ class KhazenlyService:
                     "Tel": primary_tel,
                     "secondaryTel": secondary_tel,
                     "Address1": self.sanitize_text(
-                        address.address or 'Address not provided', 100, "address1"
+                        f"{address.city} - {address.address}" if address.city and address.address
+                        else (address.city or address.address or 'Address not provided'),
+                        100, "address1"
                     ),
                     "Address2": "",
                     "Address3": "",
