@@ -5,6 +5,7 @@ from django.db.models import Sum
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.http import HttpResponse
 from .models import (
     Category, SubCategory, Brand, Subject, Teacher, Product, ProductImage, ProductDescription,
@@ -26,7 +27,7 @@ except ImportError:
     except ImportError:
         EXCEL_AVAILABLE = False
 import io
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 class GovernmentListFilter(admin.SimpleListFilter):
     title = 'Government'
@@ -236,17 +237,145 @@ class StockProblemListFilter(admin.SimpleListFilter):
             return queryset.filter(has_stock_problem=False)
         return queryset
 
+class ShakeoutCreatedAtRangeFilter(admin.SimpleListFilter):
+    title = 'Shakeout created at'
+    parameter_name = 'shakeout_created_range'
+    template = 'admin/products/pill/shakeout_created_at_range_filter.html'
+
+    start_parameter_name = 'shakeout_created_at_from'
+    end_parameter_name = 'shakeout_created_at_to'
+
+    def __init__(self, request, params, model, model_admin):
+        super().__init__(request, params, model, model_admin)
+        for parameter_name in self.expected_parameters():
+            if parameter_name in params:
+                value = params.pop(parameter_name)
+                self.used_parameters[parameter_name] = value[-1]
+
+    def lookups(self, request, model_admin):
+        return ()
+
+    def expected_parameters(self):
+        return [self.start_parameter_name, self.end_parameter_name]
+
+    def has_output(self):
+        return True
+
+    @property
+    def start_value(self):
+        return self.used_parameters.get(self.start_parameter_name, '')
+
+    @property
+    def end_value(self):
+        return self.used_parameters.get(self.end_parameter_name, '')
+
+    @property
+    def query_parts(self):
+        params = self.request.GET.copy()
+        for parameter_name in [*self.expected_parameters(), 'p']:
+            params.pop(parameter_name, None)
+
+        return [
+            {'name': name, 'value': value}
+            for name, values in params.lists()
+            for value in values
+        ]
+
+    @property
+    def clear_query_string(self):
+        params = self.request.GET.copy()
+        for parameter_name in [*self.expected_parameters(), 'p']:
+            params.pop(parameter_name, None)
+        query_string = params.urlencode()
+        return f'?{query_string}' if query_string else '?'
+
+    def choices(self, changelist):
+        return ()
+
+    def queryset(self, request, queryset):
+        filters = {}
+        current_timezone = timezone.get_current_timezone()
+
+        start_date = parse_date(self.start_value)
+        if start_date:
+            start_datetime = datetime.combine(start_date, time.min)
+            filters['shakeout_created_at__gte'] = timezone.make_aware(
+                start_datetime,
+                current_timezone
+            )
+
+        end_date = parse_date(self.end_value)
+        if end_date:
+            end_datetime = datetime.combine(end_date + timedelta(days=1), time.min)
+            filters['shakeout_created_at__lt'] = timezone.make_aware(
+                end_datetime,
+                current_timezone
+            )
+
+        if filters:
+            return queryset.filter(**filters)
+        return queryset
+
 @admin.register(Pill)
 class PillAdmin(admin.ModelAdmin):
     list_display = [
-        'pill_number', 'easypay_invoice_sequence', 'easypay_invoice_uid', 'user', 'paid', 'status', 'is_shipped',
+        'pill_number', 'shakeout_invoice_id', 'shakeout_invoice_ref', 'shakeout_created_at_display',
+        'shakeout_updated_at_display', 'easypay_invoice_sequence', 'easypay_invoice_uid', 'user', 'paid', 'status', 'is_shipped',
         'khazenly_status', 'khazenly_actions', 'stock_problem_status', 'final_price_display', 'get_calculate_over_tax_price',
     ]
-    list_filter = ['status', 'paid', 'is_shipped', 'has_stock_problem', 'is_resolved', StockProblemListFilter, FinalPriceListFilter]
-    search_fields = ['pill_number', 'user__username']
-    readonly_fields = ['pill_number', 'stock_problem_items']
+    list_filter = [
+        'status', 'paid', 'is_shipped', ShakeoutCreatedAtRangeFilter,
+        'has_stock_problem', 'is_resolved',
+        StockProblemListFilter, FinalPriceListFilter
+    ]
+    search_fields = ['pill_number', 'user__username', 'shakeout_invoice_id', 'shakeout_invoice_ref']
+    readonly_fields = ['pill_number', 'stock_problem_items', 'shakeout_updated_at_display']
     list_editable = ['paid', 'status', 'is_shipped']
     actions = ['send_to_khazenly_bulk', 'export_to_excel_for_khazenly', 'mark_stock_problems_resolved', 'check_stock_problems']
+
+    @admin.display(description='Shakeout created at', ordering='shakeout_created_at')
+    def shakeout_created_at_display(self, obj):
+        return self._format_admin_datetime(obj.shakeout_created_at)
+
+    @admin.display(description='Shakeout updated at')
+    def shakeout_updated_at_display(self, obj):
+        return self._format_admin_datetime(self._get_shakeout_updated_at(obj))
+
+    def _get_shakeout_updated_at(self, obj):
+        shakeout_data = obj.shakeout_data or {}
+
+        webhooks = shakeout_data.get('webhooks') or []
+        for webhook in reversed(webhooks):
+            if not isinstance(webhook, dict):
+                continue
+
+            payload = webhook.get('payload') or {}
+            payload_data = payload.get('data') if isinstance(payload, dict) else {}
+            if isinstance(payload_data, dict):
+                updated_at = payload_data.get('updated_at')
+                if updated_at:
+                    return updated_at
+
+            updated_at = webhook.get('updated_at')
+            if updated_at:
+                return updated_at
+
+        return shakeout_data.get('updated_at')
+
+    def _format_admin_datetime(self, value):
+        if not value:
+            return '-'
+
+        if isinstance(value, str):
+            parsed_value = parse_datetime(value)
+            if parsed_value is None:
+                return value
+            value = parsed_value
+
+        if timezone.is_naive(value):
+            value = timezone.make_aware(value, timezone.get_current_timezone())
+
+        return timezone.localtime(value).strftime('%Y-%m-%d %H:%M:%S')
 
     def final_price_display(self, obj):
         return obj.final_price()
