@@ -1,0 +1,35 @@
+{% load i18n %}
+<details data-filter-title="{{ title }}" open>
+  <summary>
+    {% blocktranslate with filter_title=title %} By {{ filter_title }} {% endblocktranslate %}
+  </summary>
+  <form method="get" style="padding: 10px 15px;">
+    {% for query_part in spec.query_parts %}
+      <input type="hidden" name="{{ query_part.name }}" value="{{ query_part.value }}">
+    {% endfor %}
+    <div style="margin-bottom: 8px;">
+      <label for="shakeout-created-at-from" style="display: block; margin-bottom: 4px;">{% translate "From" %}</label>
+      <input
+        id="shakeout-created-at-from"
+        type="date"
+        name="{{ spec.start_parameter_name }}"
+        value="{{ spec.start_value }}"
+        style="box-sizing: border-box; width: 100%;"
+      >
+    </div>
+    <div style="margin-bottom: 10px;">
+      <label for="shakeout-created-at-to" style="display: block; margin-bottom: 4px;">{% translate "To" %}</label>
+      <input
+        id="shakeout-created-at-to"
+        type="date"
+        name="{{ spec.end_parameter_name }}"
+        value="{{ spec.end_value }}"
+        style="box-sizing: border-box; width: 100%;"
+      >
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button type="submit" class="button">{% translate "Apply" %}</button>
+      <a href="{{ spec.clear_query_string }}">{% translate "Clear" %}</a>
+    </div>
+  </form>
+</details>
